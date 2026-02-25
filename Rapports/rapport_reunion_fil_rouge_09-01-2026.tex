@@ -1,0 +1,190 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{hyperref}
+\usepackage{enumitem}
+
+\geometry{margin=2.5cm}
+\setstretch{1.15}
+
+\title{Synthèse de la réunion du projet fil rouge \\ 
+Axes d'amélioration, compléments et réorientations}
+\author{Benjamin Lepourtois, ChatGPT}
+\date{09 janvier 2026}
+
+\begin{document}
+\maketitle
+
+\section{Problème central identifié}
+
+Le point principal soulevé par les différents interlocuteurs concerne un \textbf{manque de problématisation explicite} du sujet.
+
+L’état de l’art et la présentation globale du projet sont perçus comme :
+\begin{itemize}
+    \item trop orientés \textit{solution} (LLM $\rightarrow$ Behavior Trees),
+    \item insuffisamment ancrés dans une \textbf{question scientifique clairement formulée},
+    \item trop synthétiques pour permettre de comprendre les verrous réels du problème.
+\end{itemize}
+
+En conséquence, il est difficile pour les encadrants d’identifier précisément :
+\begin{itemize}
+    \item la ou les questions de recherche adressées,
+    \item les verrous scientifiques ciblés,
+    \item la cohérence entre ces verrous et la méthodologie proposée.
+\end{itemize}
+
+\section{État de l’art : restructuration nécessaire}
+
+\subsection{Définition formelle des Behavior Trees}
+
+Il est jugé indispensable d’introduire une définition claire et formelle des Behavior Trees, même si cela peut sembler redondant pour un public expert.
+
+Les éléments suivants doivent apparaître explicitement :
+\begin{itemize}
+    \item définition d’un Behavior Tree,
+    \item types de nœuds (Sequence, Fallback, Parallel, etc.),
+    \item distinction entre actions et conditions,
+    \item syntaxe XML associée,
+    \item lien entre XML et moteur d’exécution (ex. BehaviorTree.CPP en C++),
+    \item notion de validité syntaxique et de validité sémantique.
+\end{itemize}
+
+Cette étape permet :
+\begin{itemize}
+    \item d’établir une base conceptuelle commune,
+    \item de vérifier la maîtrise de l’objet d’étude,
+    \item de préparer rigoureusement le lien avec la génération automatique par LLM.
+\end{itemize}
+
+\subsection{Clarification des notions de syntaxe, sémantique et hallucination}
+
+Les termes suivants sont utilisés mais insuffisamment définis :
+\begin{itemize}
+    \item \textbf{Syntaxe} : respect du schéma XML, structure valide, nœuds autorisés.
+    \item \textbf{Sémantique} : comportement réel induit sur le robot, adéquation avec l’intention, absence d’événements redoutés.
+    \item \textbf{Hallucination} : génération de skills inexistants, d’actions incohérentes ou de structures non exécutables.
+\end{itemize}
+
+Une clarification explicite est attendue afin d’éviter toute ambiguïté conceptuelle.
+
+\subsection{Repositionnement de l’état de l’art}
+
+L’état de l’art est actuellement perçu comme trop générique et centré sur les LLM.
+
+Il est recommandé de :
+\begin{itemize}
+    \item partir des objets manipulés : Behavior Trees, XML, structures formelles,
+    \item élargir à la littérature sur la génération de structures contraintes (XML, code, graphes),
+    \item revenir ensuite au cas spécifique des Behavior Trees.
+\end{itemize}
+
+L’objectif est de montrer que le sujet s’inscrit dans un cadre plus large que le seul couplage BT--LLM.
+
+\section{Méthodologie : justification des choix}
+
+\subsection{Faire émerger les questions avant les solutions}
+
+Les choix méthodologiques (fine-tuning, RAG, prompt système, grammaire formelle) apparaissent trop tôt.
+
+Il est attendu de :
+\begin{enumerate}
+    \item formuler explicitement les questions scientifiques (ex. validité syntaxique, intégration de règles implicites, gestion de l’ambiguïté),
+    \item montrer ensuite comment chaque technique répond à une question précise.
+\end{enumerate}
+
+\subsection{Rôle exact du LLM}
+
+Il est nécessaire d’insister clairement sur le fait que :
+\begin{itemize}
+    \item le LLM ne crée pas de nouvelles compétences,
+    \item il sélectionne et orchestre des skills existants,
+    \item il agit comme un traducteur entre intention utilisateur et structure formelle.
+\end{itemize}
+
+Ce point est central pour la compréhension globale de l’approche.
+
+\subsection{Gestion de l’implicite utilisateur}
+
+La problématique de l’implicite est jugée pertinente mais insuffisamment visible.
+
+À expliciter :
+\begin{itemize}
+    \item distinction entre information explicite et contraintes implicites (sécurité, règles métier),
+    \item rôle du RAG pour injecter des règles non exprimées,
+    \item possibilité d’interactions de clarification avec l’utilisateur.
+\end{itemize}
+
+\section{Évaluation : re-priorisation recommandée}
+
+\subsection{Limites de l’évaluation fonctionnelle}
+
+L’évaluation fonctionnelle complète est identifiée comme extrêmement coûteuse :
+\begin{itemize}
+    \item explosion combinatoire,
+    \item dépendance forte à la simulation,
+    \item complexité temporelle et capteurs bruités,
+    \item difficulté à faire émerger des événements redoutés réalistes.
+\end{itemize}
+
+Il est recommandé de :
+\begin{itemize}
+    \item prioriser la validation syntaxique et structurelle,
+    \item limiter l’évaluation fonctionnelle à des cas simples et artificiels,
+    \item éviter de promettre une validation fonctionnelle réaliste exhaustive.
+\end{itemize}
+
+\section{Améliorations de la présentation}
+
+\subsection{Manque de contextualisation}
+
+Les slides sont jugées trop synthétiques.
+
+Il est conseillé d’ajouter :
+\begin{itemize}
+    \item schémas explicatifs,
+    \item exemples concrets de Behavior Trees,
+    \item exemples XML minimaux.
+\end{itemize}
+
+\subsection{Séparation plus nette des parties}
+
+Les frontières entre les sections doivent être clarifiées :
+\begin{itemize}
+    \item état de l’art,
+    \item problématique,
+    \item méthodologie,
+    \item preuve de concept,
+    \item limites et perspectives.
+\end{itemize}
+
+\section{Points positifs reconnus}
+
+Les éléments suivants ont été explicitement valorisés :
+\begin{itemize}
+    \item preuve de concept pertinente et prometteuse,
+    \item bonne appropriation de ROS2, Gazebo et BehaviorTree.CPP,
+    \item intuition solide sur l’usage du RAG, des prompts systèmes et des grammaires,
+    \item organisation de projet jugée sérieuse.
+\end{itemize}
+
+Le message global des encadrants est le suivant :
+\begin{quote}
+    La direction est pertinente, mais le cadrage scientifique et pédagogique doit être renforcé.
+\end{quote}
+
+\section{Checklist synthétique}
+
+\begin{enumerate}
+    \item Reformuler une problématique centrale claire
+    \item Refaire l’état de l’art en partant des Behavior Trees et du XML
+    \item Définir précisément syntaxe, sémantique et hallucination
+    \item Justifier chaque choix méthodologique par une question
+    \item Réduire les ambitions d’évaluation fonctionnelle
+    \item Ajouter des exemples concrets et visuels
+\end{enumerate}
+
+\end{document}
