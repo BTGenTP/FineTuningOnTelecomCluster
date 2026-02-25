@@ -42,7 +42,8 @@ if [ ! -d "$VENV_DIR" ]; then
         scipy \
         sentencepiece \
         protobuf \
-        rich
+        rich \
+        lm-format-enforcer
     echo "[SETUP] Dépendances installées."
 else
     source "$VENV_DIR/bin/activate"

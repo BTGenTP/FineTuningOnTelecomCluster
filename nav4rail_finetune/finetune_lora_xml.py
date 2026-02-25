@@ -4,18 +4,21 @@ Fine-tuning QLoRA pour NAV4RAIL — Mission NL → BehaviorTree XML
 Modèle  : Mistral-7B-Instruct-v0.2 (ou TinyLlama-1.1B-Chat pour baseline)
 Méthode : QLoRA (4-bit quantization + LoRA adapters)
 GPU     : Tesla P100-PCIE-16GB (cluster Telecom Paris)
-Dataset : dataset_nav4rail.jsonl — 100 paires (mission, XML)
+Dataset : dataset_nav4rail_500.jsonl — 500 paires (mission, XML)
 
 Usage :
-    python finetune_lora_xml.py --model mistral   # Mistral-7B (recommandé)
-    python finetune_lora_xml.py --model tinyllama  # Baseline rapide (~20 min)
+    python finetune_lora_xml.py --model mistral              # Mistral-7B (recommandé)
+    python finetune_lora_xml.py --model tinyllama            # Baseline rapide
     python finetune_lora_xml.py --model mistral --eval-only  # Inférence seule
+    python finetune_lora_xml.py --model mistral --eval-only --constrained
+                                                             # + décodage contraint GBNF
 """
 
 import argparse
 import gc
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -29,6 +32,8 @@ from transformers import (
     TrainingArguments,
 )
 from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
+
+from validate_bt import validate_bt   # Validateur multi-niveaux (L1 + L2 + L3)
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -214,7 +219,7 @@ def train(model_key: str):
     return trainer.model, tokenizer, cfg
 
 
-# ─── Inférence & évaluation ──────────────────────────────────────────────────
+# ─── Inférence ───────────────────────────────────────────────────────────────
 
 SKILLS_DOC = """Skills disponibles :
 - GetMission        : Récupère et valide les paramètres de la mission
@@ -234,18 +239,27 @@ SYSTEM_PROMPT = (
     "Réponds uniquement avec le XML, sans explication."
 )
 
-VALID_TAGS = {
-    "root", "BehaviorTree", "Sequence", "Fallback", "Parallel",
-    "GetMission", "CalculatePath", "Move", "Decelerate",
-    "ManageMeasurement", "CheckObstacle", "Alert", "Stop",
-}
+
+def _build_prompt(mission: str) -> str:
+    instruction = f"{SYSTEM_PROMPT}\n\n{SKILLS_DOC}\n\nMission : {mission}"
+    return f"<s>[INST] {instruction} [/INST]"
+
+
+def _extract_xml(decoded: str) -> str:
+    """Extrait le bloc <root>...</root> de la sortie brute du modèle."""
+    if "[/INST]" in decoded:
+        raw = decoded.split("[/INST]", 1)[1].strip()
+    else:
+        raw = decoded.strip()
+    match = re.search(r"(<root\b.*?</root>)", raw, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return raw
 
 
 def generate_xml(model, tokenizer, mission: str, max_new_tokens: int = 600) -> str:
-    import re
-
-    instruction = f"{SYSTEM_PROMPT}\n\n{SKILLS_DOC}\n\nMission : {mission}"
-    prompt = f"<s>[INST] {instruction} [/INST]"
+    """Génération XML libre (décodage glouton standard)."""
+    prompt = _build_prompt(mission)
     inputs = tokenizer(prompt, return_tensors="pt").to(DEVICE)
 
     model.eval()
@@ -259,94 +273,118 @@ def generate_xml(model, tokenizer, mission: str, max_new_tokens: int = 600) -> s
             pad_token_id=tokenizer.eos_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
-    decoded = tokenizer.decode(out[0], skip_special_tokens=True)
-
-    # Extraction du XML (après [/INST])
-    if "[/INST]" in decoded:
-        raw = decoded.split("[/INST]", 1)[1].strip()
-    else:
-        raw = decoded.strip()
-
-    # Isolation du bloc <root>...</root> — ignore tout texte parasite autour
-    match = re.search(r"(<root\b.*?</root>)", raw, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-
-    return raw  # fallback si pas de balise root trouvée
+    return _extract_xml(tokenizer.decode(out[0], skip_special_tokens=True))
 
 
-def validate_xml(xml_str: str) -> tuple[bool, str]:
-    """Validation syntaxique BT + vérification des skills."""
-    import xml.etree.ElementTree as ET
-    try:
-        root = ET.fromstring(xml_str)
-    except ET.ParseError as e:
-        return False, f"XML invalide : {e}"
+def generate_xml_constrained(model, tokenizer, mission: str,
+                              max_new_tokens: int = 600) -> str:
+    """
+    Génération XML avec décodage contraint (grammaire GBNF via lm-format-enforcer).
 
-    # Vérification tag racine
-    if root.tag != "root":
-        return False, f"Tag racine attendu '<root>', trouvé '<{root.tag}>'"
+    À chaque étape, seuls les tokens compatibles avec la grammaire NAV4RAIL
+    sont autorisés → zéro hallucination de nom de skill garantie.
 
-    # Vérification BTCPP_format
-    if root.get("BTCPP_format") != "4":
-        return False, "Attribut BTCPP_format='4' manquant sur <root>"
+    Requiert : pip install lm-format-enforcer
+    """
+    from nav4rail_grammar import get_prefix_fn
 
-    # Vérification des tags (allowlist)
-    unknown = []
-    for elem in root.iter():
-        if elem.tag not in VALID_TAGS:
-            unknown.append(elem.tag)
-    if unknown:
-        return False, f"Tags inconnus (hallucinations) : {unknown}"
+    prefix_fn = get_prefix_fn(tokenizer)
+    prompt = _build_prompt(mission)
+    inputs = tokenizer(prompt, return_tensors="pt").to(DEVICE)
 
-    # Vérification que Stop est présent
-    stops = [e for e in root.iter() if e.tag == "Stop"]
-    if not stops:
-        return False, "Nœud <Stop> manquant (le BT ne se termine jamais)"
+    model.eval()
+    with torch.no_grad():
+        out = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            temperature=1.0,
+            repetition_penalty=1.1,
+            pad_token_id=tokenizer.eos_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+            prefix_allowed_tokens_fn=prefix_fn,   # ← contrainte grammaticale
+        )
+    return _extract_xml(tokenizer.decode(out[0], skip_special_tokens=True))
 
-    return True, "OK"
+
+# ─── Évaluation ──────────────────────────────────────────────────────────────
+
+TEST_MISSIONS = [
+    "Inspecte la section de voie au km 30",
+    "Mesure la géométrie de la voie sur 3 km depuis le km 12",
+    "Navigue en mode sécurisé vers le secteur nord",
+    "Effectue une patrouille entre km 0 et km 5 avec rapport",
+    "Va au dépôt principal après l'inspection",
+    "Certifie la section B après les travaux de maintenance",
+    "Contrôle complet avec alerte si défaut détecté au km 25",
+    "Mesure les paramètres thermiques entre km 8 et km 10",
+    "Inspecte le tunnel au km 33 avec vérification obstacle",
+    "Déplace-toi vers le point de chargement et attends",
+]
 
 
-def evaluate(model, tokenizer, n_samples: int = 10):
-    """Évalue sur des missions hors dataset."""
-    test_missions = [
-        "Inspecte la section de voie au km 30",
-        "Mesure la géométrie de la voie sur 3 km depuis le km 12",
-        "Navigue en mode sécurisé vers le secteur nord",
-        "Effectue une patrouille entre km 0 et km 5 avec rapport",
-        "Va au dépôt principal après l'inspection",
-        "Certifie la section B après les travaux de maintenance",
-        "Contrôle complet avec alerte si défaut détecté au km 25",
-        "Mesure les paramètres thermiques entre km 8 et km 10",
-        "Inspecte le tunnel au km 33 avec vérification obstacle",
-        "Déplace-toi vers le point de chargement et attends",
-    ]
+def evaluate(model, tokenizer, n_samples: int = 10, constrained: bool = False):
+    """
+    Évalue le modèle sur des missions hors dataset.
 
-    results = {"valid": 0, "invalid": 0, "errors": []}
+    Utilise validate_bt() (3 niveaux : syntaxique, structurel, sémantique).
+    Affiche pour chaque mission : statut, score, avertissements et XML.
+    """
+    mode = "contraint (GBNF)" if constrained else "libre"
     print("\n" + "─" * 70)
-    print("ÉVALUATION — Génération XML sur missions hors dataset")
+    print(f"ÉVALUATION — Génération XML [{mode}] sur missions hors dataset")
     print("─" * 70)
 
-    for mission in test_missions[:n_samples]:
-        xml = generate_xml(model, tokenizer, mission)
-        ok, msg = validate_xml(xml)
-        status = "✓" if ok else "✗"
-        print(f"\n[{status}] Mission : {mission}")
-        if ok:
-            results["valid"] += 1
+    valid_count   = 0
+    warning_count = 0
+    scores        = []
+    all_errors    = []
+
+    for mission in TEST_MISSIONS[:n_samples]:
+        if constrained:
+            xml = generate_xml_constrained(model, tokenizer, mission)
+        else:
+            xml = generate_xml(model, tokenizer, mission)
+
+        vr = validate_bt(xml)
+
+        status   = "✓" if vr.valid else "✗"
+        warn_tag = f"  [{len(vr.warnings)}W]" if vr.warnings else ""
+        score_tag = f"  score={vr.score:.1f}"
+
+        print(f"\n[{status}] {mission}{warn_tag}{score_tag}")
+
+        if vr.valid:
+            valid_count += 1
+            scores.append(vr.score)
+            if vr.warnings:
+                warning_count += 1
+                for w in vr.warnings:
+                    print(f"    {w}")
             print(xml[:300] + ("..." if len(xml) > 300 else ""))
         else:
-            results["invalid"] += 1
-            results["errors"].append(msg)
-            print(f"    ERREUR : {msg}")
+            all_errors.extend(vr.errors)
+            for e in vr.errors:
+                print(f"    ERREUR : {e}")
             print(f"    Généré : {xml[:200]}")
 
+    total     = n_samples
+    avg_score = sum(scores) / len(scores) if scores else 0.0
+
     print("\n" + "─" * 70)
-    total = results["valid"] + results["invalid"]
-    print(f"Résultat : {results['valid']}/{total} BTs valides "
-          f"({100*results['valid']/total:.0f}%)")
+    print(f"Résultat        : {valid_count}/{total} BTs valides "
+          f"({100 * valid_count / total:.0f}%)")
+    print(f"Score moyen     : {avg_score:.2f} / 1.0")
+    print(f"Avec warnings   : {warning_count} / {valid_count} valides")
     print("─" * 70)
-    return results
+
+    return {
+        "valid":    valid_count,
+        "invalid":  total - valid_count,
+        "warnings": warning_count,
+        "avg_score": avg_score,
+        "errors":   all_errors,
+    }
 
 
 # ─── Point d'entrée ──────────────────────────────────────────────────────────
@@ -359,6 +397,9 @@ def main():
                         help="Inférence uniquement (charge l'adapter sauvegardé)")
     parser.add_argument("--adapter-path", type=str, default=None,
                         help="Chemin vers l'adapter LoRA pour --eval-only")
+    parser.add_argument("--constrained", action="store_true",
+                        help="Décodage contraint par grammaire GBNF (nécessite "
+                             "lm-format-enforcer)")
     args = parser.parse_args()
 
     log(f"=== NAV4RAIL Fine-Tuning QLoRA ===")
@@ -389,7 +430,7 @@ def main():
     else:
         model, tokenizer, _ = train(args.model)
 
-    evaluate(model, tokenizer)
+    evaluate(model, tokenizer, constrained=args.constrained)
     log("Terminé.")
 
 
