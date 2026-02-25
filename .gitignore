@@ -1,0 +1,13 @@
+*.pdf
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+*.nav
+*.snm
+*.json
+*.jsonl
+TP_FineTuning_LoRA_Nav4Rail.ipynb

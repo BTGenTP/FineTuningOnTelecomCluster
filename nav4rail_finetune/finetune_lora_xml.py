@@ -58,7 +58,7 @@ MODELS = {
     },
 }
 
-DATASET_PATH = Path(__file__).parent / "dataset_nav4rail.jsonl"
+DATASET_PATH = Path(__file__).parent / "dataset_nav4rail_500.jsonl"
 OUTPUT_DIR   = Path(__file__).parent / "outputs"
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"

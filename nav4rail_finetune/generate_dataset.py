@@ -1,27 +1,27 @@
 """
 Générateur de dataset NAV4RAIL : (prompt mission, BehaviorTree XML)
-Proxy synthétique pour Phase 2 du projet - objectif 100-150 paires.
+Proxy synthétique pour Phase 2 — 500 paires.
 
-Format XML : BehaviorTree.CPP v4 (compatible BTCPP_format="4")
+Format XML : BehaviorTree.CPP v4 (BTCPP_format="4")
 Nœuds de contrôle : Sequence, Fallback
-Nœuds action/condition : skills NAV4RAIL
+Skills : GetMission, CalculatePath, Move, Decelerate,
+         ManageMeasurement, CheckObstacle, Alert, Stop
 
-Catégories couvertes :
-  1. Navigation simple        (20 ex.)
-  2. Inspection de voie       (25 ex.)
-  3. Mesures géométriques     (20 ex.)
-  4. Navigation sécurisée     (15 ex.) — Fallback obstacle
-  5. Missions complexes       (20 ex.) — combinées + alertes
+Catégories :
+  1. Navigation simple        (100 ex.)
+  2. Inspection de voie       (125 ex.)
+  3. Mesures géométriques     (100 ex.)
+  4. Navigation sécurisée     ( 75 ex.) — Fallback obstacle
+  5. Missions complexes       (100 ex.) — combinées + alertes
 """
 
 import json
 import random
-import textwrap
 from pathlib import Path
 
 random.seed(42)
 
-# ─── Catalogue des skills NAV4RAIL ──────────────────────────────────────────
+# ─── Catalogue skills NAV4RAIL ───────────────────────────────────────────────
 SKILLS_DOC = """Skills disponibles :
 - GetMission        : Récupère et valide les paramètres de la mission
 - CalculatePath     : Calcule le chemin optimal vers la destination
@@ -40,48 +40,60 @@ SYSTEM_PROMPT = (
     "Réponds uniquement avec le XML, sans explication."
 )
 
-# ─── Helpers XML ─────────────────────────────────────────────────────────────
+# ─── Builder XML ─────────────────────────────────────────────────────────────
+# Un nœud est un dict : {"tag": str, "name": str, "children": [...]}
+# On construit l'arbre, puis on le rend avec une indentation uniforme à 2 espaces.
 
-def xml_sequence(name: str, children: str, indent: int = 6) -> str:
-    pad = " " * indent
-    pad2 = " " * (indent + 2)
-    lines = [f'{pad}<Sequence name="{name}">']
-    for child in children.strip().splitlines():
-        lines.append(pad2 + child.strip())
-    lines.append(f"{pad}</Sequence>")
+def N(tag: str, name: str, *children) -> dict:
+    """Crée un nœud BT (action ou nœud de contrôle)."""
+    d = {"tag": tag, "name": name}
+    if children:
+        d["children"] = list(children)
+    return d
+
+# Raccourcis lisibles
+def A(skill: str, nm: str) -> dict:
+    return N(skill, nm)
+
+def S(nm: str, *ch) -> dict:
+    return N("Sequence", nm, *ch)
+
+def F(nm: str, *ch) -> dict:
+    return N("Fallback", nm, *ch)
+
+
+def render(node: dict, depth: int = 0) -> str:
+    """Rend récursivement un nœud en XML indenté (2 espaces par niveau)."""
+    pad = "  " * depth
+    tag = node["tag"]
+    name = node.get("name", "")
+    attrs = f' name="{name}"' if name else ""
+    children = node.get("children")
+
+    if not children:
+        return f"{pad}<{tag}{attrs}/>"
+
+    lines = [f"{pad}<{tag}{attrs}>"]
+    for child in children:
+        lines.append(render(child, depth + 1))
+    lines.append(f"{pad}</{tag}>")
     return "\n".join(lines)
 
 
-def xml_fallback(name: str, children: str, indent: int = 6) -> str:
-    pad = " " * indent
-    pad2 = " " * (indent + 2)
-    lines = [f'{pad}<Fallback name="{name}">']
-    for child in children.strip().splitlines():
-        lines.append(pad2 + child.strip())
-    lines.append(f"{pad}</Fallback>")
-    return "\n".join(lines)
-
-
-def xml_action(skill: str, name: str) -> str:
-    return f'<{skill} name="{name}"/>'
-
-
-def wrap_bt(inner_xml: str) -> str:
-    return textwrap.dedent(f"""\
-        <root BTCPP_format="4">
-          <BehaviorTree ID="MainTree">
-        {inner_xml}
-          </BehaviorTree>
-        </root>""")
+def bt(tree: dict) -> str:
+    """Enveloppe un arbre dans <root><BehaviorTree>...</BehaviorTree></root>."""
+    inner = render(tree, depth=2)
+    return (
+        '<root BTCPP_format="4">\n'
+        '  <BehaviorTree ID="MainTree">\n'
+        f'{inner}\n'
+        '  </BehaviorTree>\n'
+        '</root>'
+    )
 
 
 def make_entry(mission: str, xml: str) -> dict:
-    """Format en instruction Mistral : <s>[INST]...[/INST]...</s>"""
-    instruction = (
-        f"{SYSTEM_PROMPT}\n\n"
-        f"{SKILLS_DOC}\n\n"
-        f"Mission : {mission}"
-    )
+    instruction = f"{SYSTEM_PROMPT}\n\n{SKILLS_DOC}\n\nMission : {mission}"
     return {
         "mission": mission,
         "xml": xml,
@@ -89,461 +101,550 @@ def make_entry(mission: str, xml: str) -> dict:
     }
 
 
-# ─── 1. Navigation simple (20 exemples) ─────────────────────────────────────
+# ─── Templates XML ───────────────────────────────────────────────────────────
 
-NAV_VERBS = [
-    "Déplace-toi", "Va", "Rejoins", "Navigue jusqu'à",
-    "Retourne", "Avance jusqu'au",
-]
-NAV_TARGETS = [
-    "le dépôt principal", "le point de chargement", "la position de départ",
-    "le poste de maintenance", "la zone de stationnement", "la voie de service",
-]
+def xml_nav_simple() -> str:
+    return bt(S("navigation_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_target"),
+        A("Decelerate", "decelerate"),
+        A("Stop", "stop"),
+    ))
+
+def xml_nav_direct() -> str:
+    return bt(S("navigation_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_target"),
+        A("Stop", "stop"),
+    ))
+
+def xml_nav_urgency() -> str:
+    return bt(S("urgency_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_fast"),
+        A("Stop", "stop"),
+    ))
+
+def xml_nav_return() -> str:
+    return bt(S("return_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_return_path"),
+        A("Move", "return_to_depot"),
+        A("Decelerate", "decelerate"),
+        A("Stop", "stop"),
+    ))
+
+def xml_nav_standby() -> str:
+    return bt(S("standby_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_standby_point"),
+        A("Decelerate", "decelerate"),
+        A("Stop", "wait"),
+    ))
+
+def xml_inspect_simple() -> str:
+    return bt(S("inspection_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_zone"),
+        A("ManageMeasurement", "start_inspection"),
+        A("Move", "traverse_zone"),
+        A("ManageMeasurement", "end_inspection"),
+        A("Stop", "stop"),
+    ))
+
+def xml_inspect_with_decel() -> str:
+    return bt(S("inspection_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_zone"),
+        A("Decelerate", "slow_approach"),
+        A("ManageMeasurement", "inspection"),
+        A("ManageMeasurement", "inspection_confirm"),
+        A("Stop", "stop"),
+    ))
+
+def xml_inspect_multi() -> str:
+    return bt(S("inspection_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_start"),
+        A("ManageMeasurement", "measure_point_1"),
+        A("Move", "move_to_mid"),
+        A("ManageMeasurement", "measure_point_2"),
+        A("Move", "move_to_end"),
+        A("ManageMeasurement", "measure_point_3"),
+        A("Stop", "stop"),
+    ))
+
+def xml_inspect_with_check() -> str:
+    return bt(S("inspection_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_zone"),
+        A("CheckObstacle", "check_before_inspect"),
+        A("Decelerate", "slow_approach"),
+        A("ManageMeasurement", "inspection"),
+        A("Stop", "stop"),
+    ))
+
+def xml_measure_simple() -> str:
+    return bt(S("measurement_sequence",
+        A("GetMission", "get_mission"),
+        A("ManageMeasurement", "measure"),
+        A("Stop", "stop"),
+    ))
+
+def xml_measure_with_nav() -> str:
+    return bt(S("measurement_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_measurement_point"),
+        A("Decelerate", "slow_for_measure"),
+        A("ManageMeasurement", "measure"),
+        A("Stop", "stop"),
+    ))
+
+def xml_measure_multi() -> str:
+    return bt(S("measurement_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_point_1"),
+        A("ManageMeasurement", "measure_1"),
+        A("Move", "move_to_point_2"),
+        A("ManageMeasurement", "measure_2"),
+        A("Stop", "stop"),
+    ))
+
+def xml_measure_3points() -> str:
+    return bt(S("measurement_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_point_1"),
+        A("ManageMeasurement", "measure_1"),
+        A("Move", "move_to_point_2"),
+        A("ManageMeasurement", "measure_2"),
+        A("Move", "move_to_point_3"),
+        A("ManageMeasurement", "measure_3"),
+        A("Stop", "stop"),
+    ))
+
+def xml_measure_and_report() -> str:
+    return bt(S("measurement_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_zone"),
+        A("Decelerate", "slow_for_measure"),
+        A("ManageMeasurement", "measure"),
+        A("Alert", "send_measurement_report"),
+        A("Stop", "stop"),
+    ))
+
+def xml_safe_nav() -> str:
+    return bt(S("main_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        F("safe_navigation",
+            S("clear_path",
+                A("CheckObstacle", "check_obstacle"),
+                A("Move", "move_forward"),
+            ),
+            S("handle_obstacle",
+                A("Alert", "alert_obstacle"),
+                A("Stop", "emergency_stop"),
+            ),
+        ),
+        A("Stop", "mission_complete"),
+    ))
+
+def xml_safe_nav_with_decel() -> str:
+    return bt(S("main_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        F("safe_navigation",
+            S("clear_path",
+                A("CheckObstacle", "check_obstacle"),
+                A("Move", "move_forward"),
+            ),
+            S("handle_obstacle",
+                A("Alert", "alert_obstacle"),
+                A("Stop", "emergency_stop"),
+            ),
+        ),
+        A("Decelerate", "decelerate_at_destination"),
+        A("Stop", "mission_complete"),
+    ))
+
+def xml_safe_nav_multi() -> str:
+    return bt(S("main_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        F("safe_segment_1",
+            S("clear_1",
+                A("CheckObstacle", "check_obstacle_1"),
+                A("Move", "move_segment_1"),
+            ),
+            S("blocked_1",
+                A("Alert", "alert_1"),
+                A("Stop", "stop_1"),
+            ),
+        ),
+        F("safe_segment_2",
+            S("clear_2",
+                A("CheckObstacle", "check_obstacle_2"),
+                A("Move", "move_segment_2"),
+            ),
+            S("blocked_2",
+                A("Alert", "alert_2"),
+                A("Stop", "stop_2"),
+            ),
+        ),
+        A("Stop", "mission_complete"),
+    ))
+
+def xml_inspect_then_return() -> str:
+    return bt(S("main_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_zone"),
+        A("ManageMeasurement", "inspection"),
+        A("ManageMeasurement", "inspection_confirm"),
+        A("CalculatePath", "calculate_return_path"),
+        A("Move", "return_to_depot"),
+        A("Decelerate", "decelerate"),
+        A("Stop", "stop"),
+    ))
+
+def xml_inspect_and_alert() -> str:
+    return bt(S("main_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_zone"),
+        A("ManageMeasurement", "inspection"),
+        A("CheckObstacle", "verify_safety"),
+        A("Alert", "send_report"),
+        A("Stop", "stop"),
+    ))
+
+def xml_safe_inspect() -> str:
+    return bt(S("main_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        F("safe_approach",
+            S("clear_path",
+                A("CheckObstacle", "check_obstacle"),
+                A("Move", "move_to_zone"),
+            ),
+            S("blocked",
+                A("Alert", "alert_blocked"),
+                A("Stop", "stop_blocked"),
+            ),
+        ),
+        A("Decelerate", "slow_for_inspection"),
+        A("ManageMeasurement", "inspection"),
+        A("Stop", "stop"),
+    ))
+
+def xml_patrol() -> str:
+    return bt(S("patrol_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_start"),
+        A("ManageMeasurement", "measure_start"),
+        A("Move", "move_to_mid_1"),
+        A("ManageMeasurement", "measure_mid_1"),
+        A("Move", "move_to_mid_2"),
+        A("ManageMeasurement", "measure_mid_2"),
+        A("Move", "move_to_end"),
+        A("ManageMeasurement", "measure_end"),
+        A("Alert", "send_patrol_report"),
+        A("Stop", "stop"),
+    ))
+
+def xml_certify() -> str:
+    return bt(S("certification_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_zone"),
+        A("CheckObstacle", "verify_zone_clear"),
+        A("ManageMeasurement", "measure_before"),
+        A("ManageMeasurement", "measure_after"),
+        A("ManageMeasurement", "measure_confirm"),
+        A("Alert", "certify_section"),
+        A("Stop", "stop"),
+    ))
+
+def xml_safe_inspect_and_return() -> str:
+    return bt(S("main_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        F("safe_approach",
+            S("clear_path",
+                A("CheckObstacle", "check_obstacle"),
+                A("Move", "move_to_zone"),
+            ),
+            S("blocked",
+                A("Alert", "alert_blocked"),
+                A("Stop", "stop_blocked"),
+            ),
+        ),
+        A("ManageMeasurement", "inspection"),
+        A("ManageMeasurement", "inspection_confirm"),
+        A("Alert", "send_report"),
+        A("CalculatePath", "calculate_return_path"),
+        A("Move", "return_to_depot"),
+        A("Stop", "stop"),
+    ))
 
 
-def gen_navigation(n=20) -> list:
-    examples = []
-    km_pairs = [(i, i + random.randint(2, 10)) for i in range(0, 60, 3)]
-    random.shuffle(km_pairs)
+# ─── Vocabulaire missions ────────────────────────────────────────────────────
 
-    # XML template navigation simple
-    def xml_nav():
-        body = "\n      ".join([
-            xml_action("GetMission", "get_mission"),
-            xml_action("CalculatePath", "calculate_path"),
-            xml_action("Move", "move_to_target"),
-            xml_action("Decelerate", "decelerate"),
-            xml_action("Stop", "stop"),
-        ])
-        inner = f"""    <Sequence name="navigation_sequence">
-          {body}
-        </Sequence>"""
-        return wrap_bt(inner)
+NAV_VERBS    = ["Déplace-toi", "Va", "Rejoins", "Navigue jusqu'à",
+                "Retourne", "Avance jusqu'au", "Positionne-toi au"]
+NAV_TARGETS  = ["le dépôt principal", "le point de chargement",
+                "la position de départ", "le poste de maintenance",
+                "la zone de stationnement", "la voie de service",
+                "le terminal de ravitaillement", "la zone de remisage",
+                "le poste de contrôle central", "la voie d'évitement"]
+URGENCY_TGTS = ["le secteur d'urgence", "la zone d'incident",
+                "le point d'intervention prioritaire"]
 
-    # Navigation vers km
-    for i in range(10):
-        km_start, km_end = km_pairs[i]
-        verb = random.choice(NAV_VERBS)
-        mission = f"{verb} au km {km_end} depuis le km {km_start}"
-        examples.append(make_entry(mission, xml_nav()))
+INSPECT_OBJS  = ["la voie", "les rails", "le tunnel ferroviaire",
+                 "le passage à niveau", "les aiguillages", "les traverses",
+                 "les soudures de rails", "la signalisation", "les capteurs de voie",
+                 "les fixations de rails", "la géométrie de la courbe",
+                 "les joints de dilatation", "les éléments de sécurité"]
+INSPECT_VERBS = ["Inspecte", "Contrôle", "Vérifie", "Effectue une inspection de",
+                 "Réalise un contrôle de", "Examine"]
+SECTIONS      = ["A", "B", "C", "D", "E", "nord", "sud", "est", "ouest",
+                 "principale", "secondaire", "maintenance", "critique"]
 
-    # Navigation vers cible nommée
-    for i in range(10):
-        target = random.choice(NAV_TARGETS)
-        verb = random.choice(NAV_VERBS)
-        mission = f"{verb} {target}"
-        examples.append(make_entry(mission, xml_nav()))
+MEASURE_TYPES = ["la géométrie de voie", "le nivellement", "le dévers",
+                 "la largeur de voie", "l'alignement des rails",
+                 "les paramètres thermiques", "le profil de voie",
+                 "les paramètres au point de contrôle", "l'usure des rails",
+                 "la résistance des soudures", "la vibration de voie"]
+MEASURE_VERBS = ["Mesure", "Effectue des mesures de", "Enregistre",
+                 "Prends des mesures de", "Réalise une mesure de",
+                 "Effectue un relevé de"]
 
-    return examples
-
-
-# ─── 2. Inspection de voie (25 exemples) ────────────────────────────────────
-
-INSPECT_TYPES = [
-    ("la voie", "inspect_track"),
-    ("les rails", "inspect_rails"),
-    ("le tunnel ferroviaire", "inspect_tunnel"),
-    ("le passage à niveau", "inspect_crossing"),
-    ("les aiguillages", "inspect_switches"),
-    ("les traverses", "inspect_sleepers"),
-    ("les soudures de rails", "inspect_welds"),
-    ("la signalisation", "inspect_signals"),
-]
-
-INSPECT_VERBS = [
-    "Inspecte", "Contrôle", "Vérifie", "Effectue une inspection de",
-    "Réalise un contrôle de",
-]
-
-
-def xml_inspection_simple():
-    inner = """    <Sequence name="inspection_sequence">
-          <GetMission name="get_mission"/>
-          <CalculatePath name="calculate_path"/>
-          <Move name="move_to_zone"/>
-          <ManageMeasurement name="start_inspection"/>
-          <Move name="traverse_zone"/>
-          <ManageMeasurement name="end_inspection"/>
-          <Stop name="stop"/>
-        </Sequence>"""
-    return wrap_bt(inner)
-
-
-def xml_inspection_with_decel():
-    inner = """    <Sequence name="inspection_sequence">
-          <GetMission name="get_mission"/>
-          <CalculatePath name="calculate_path"/>
-          <Move name="move_to_zone"/>
-          <Decelerate name="slow_approach"/>
-          <ManageMeasurement name="inspection"/>
-          <ManageMeasurement name="inspection_confirm"/>
-          <Stop name="stop"/>
-        </Sequence>"""
-    return wrap_bt(inner)
-
-
-def xml_inspection_multi():
-    inner = """    <Sequence name="inspection_sequence">
-          <GetMission name="get_mission"/>
-          <CalculatePath name="calculate_path"/>
-          <Move name="move_to_start"/>
-          <ManageMeasurement name="measure_point_1"/>
-          <Move name="move_to_mid"/>
-          <ManageMeasurement name="measure_point_2"/>
-          <Move name="move_to_end"/>
-          <ManageMeasurement name="measure_point_3"/>
-          <Stop name="stop"/>
-        </Sequence>"""
-    return wrap_bt(inner)
-
-
-def gen_inspection(n=25) -> list:
-    examples = []
-    templates = [xml_inspection_simple, xml_inspection_with_decel, xml_inspection_multi]
-    for i in range(n):
-        verb = random.choice(INSPECT_VERBS)
-        obj, _ = random.choice(INSPECT_TYPES)
-        km_s = random.randint(0, 50)
-        km_e = km_s + random.randint(2, 8)
-        section = random.choice([
-            f"entre le km {km_s} et le km {km_e}",
-            f"de la section {random.choice(['A', 'B', 'C', 'D'])}",
-            f"au km {km_s}",
-            f"sur {random.randint(2, 6)} km depuis le km {km_s}",
-        ])
-        mission = f"{verb} {obj} {section}"
-        xml = random.choice(templates)()
-        examples.append(make_entry(mission, xml))
-    return examples
-
-
-# ─── 3. Mesures géométriques (20 exemples) ──────────────────────────────────
-
-MEASURE_TYPES = [
-    "la géométrie de voie", "le nivellement", "le dévers",
-    "la largeur de voie", "l'alignement des rails",
-    "les paramètres thermiques", "le profil de voie",
-    "les paramètres au point de contrôle",
-]
-
-MEASURE_VERBS = [
-    "Mesure", "Effectue des mesures de", "Enregistre",
-    "Prends des mesures de", "Réalise une mesure de",
-]
-
-
-def xml_measure_simple():
-    inner = """    <Sequence name="measurement_sequence">
-          <GetMission name="get_mission"/>
-          <ManageMeasurement name="measure"/>
-          <Stop name="stop"/>
-        </Sequence>"""
-    return wrap_bt(inner)
-
-
-def xml_measure_with_nav():
-    inner = """    <Sequence name="measurement_sequence">
-          <GetMission name="get_mission"/>
-          <CalculatePath name="calculate_path"/>
-          <Move name="move_to_measurement_point"/>
-          <Decelerate name="slow_for_measure"/>
-          <ManageMeasurement name="measure"/>
-          <Stop name="stop"/>
-        </Sequence>"""
-    return wrap_bt(inner)
-
-
-def xml_measure_multi_points():
-    inner = """    <Sequence name="measurement_sequence">
-          <GetMission name="get_mission"/>
-          <CalculatePath name="calculate_path"/>
-          <Move name="move_to_point_1"/>
-          <ManageMeasurement name="measure_1"/>
-          <Move name="move_to_point_2"/>
-          <ManageMeasurement name="measure_2"/>
-          <Stop name="stop"/>
-        </Sequence>"""
-    return wrap_bt(inner)
-
-
-def gen_measurement(n=20) -> list:
-    examples = []
-    templates = [xml_measure_simple, xml_measure_with_nav, xml_measure_multi_points]
-    for i in range(n):
-        verb = random.choice(MEASURE_VERBS)
-        mtype = random.choice(MEASURE_TYPES)
-        km_s = random.randint(0, 50)
-        km_e = km_s + random.randint(1, 5)
-        location = random.choice([
-            f"entre le km {km_s} et le km {km_e}",
-            f"à la position actuelle",
-            f"au point PK{km_s}",
-            f"sur {random.randint(1, 4)} points entre km {km_s} et km {km_e}",
-        ])
-        mission = f"{verb} {mtype} {location}"
-        xml = random.choice(templates)()
-        examples.append(make_entry(mission, xml))
-    return examples
-
-
-# ─── 4. Navigation sécurisée avec obstacles (15 exemples) ───────────────────
-
-def xml_safe_nav_fallback():
-    """Navigation avec Fallback obstacle — structure clé du projet."""
-    inner = """    <Sequence name="main_sequence">
-          <GetMission name="get_mission"/>
-          <CalculatePath name="calculate_path"/>
-          <Fallback name="safe_navigation">
-            <Sequence name="clear_path">
-              <CheckObstacle name="check_obstacle"/>
-              <Move name="move_forward"/>
-            </Sequence>
-            <Sequence name="handle_obstacle">
-              <Alert name="alert_obstacle"/>
-              <Stop name="emergency_stop"/>
-            </Sequence>
-          </Fallback>
-          <Stop name="mission_complete"/>
-        </Sequence>"""
-    return wrap_bt(inner)
-
-
-def xml_safe_nav_multi_check():
-    inner = """    <Sequence name="main_sequence">
-          <GetMission name="get_mission"/>
-          <CalculatePath name="calculate_path"/>
-          <Fallback name="safe_navigation_1">
-            <Sequence name="clear_segment_1">
-              <CheckObstacle name="check_obstacle_1"/>
-              <Move name="move_segment_1"/>
-            </Sequence>
-            <Sequence name="obstacle_segment_1">
-              <Alert name="alert_1"/>
-              <Stop name="stop_1"/>
-            </Sequence>
-          </Fallback>
-          <Fallback name="safe_navigation_2">
-            <Sequence name="clear_segment_2">
-              <CheckObstacle name="check_obstacle_2"/>
-              <Move name="move_segment_2"/>
-            </Sequence>
-            <Sequence name="obstacle_segment_2">
-              <Alert name="alert_2"/>
-              <Stop name="stop_2"/>
-            </Sequence>
-          </Fallback>
-          <Stop name="mission_complete"/>
-        </Sequence>"""
-    return wrap_bt(inner)
-
-
-SAFE_NAV_MISSIONS = [
+SAFE_MISSIONS = [
     "Navigue en mode sécurisé vers le km {}",
     "Déplace-toi vers la zone {} en vérifiant les obstacles",
     "Rejoins le km {} avec détection d'obstacles activée",
     "Navigue vers le secteur {} en mode de sécurité renforcée",
-    "Va au km {} et arrête-toi si un obstacle est détecté",
+    "Va au km {} et arrête-toi immédiatement si un obstacle est détecté",
     "Effectue une navigation sécurisée jusqu'au km {}",
     "Déplace-toi en vérifiant la voie à chaque segment vers km {}",
-    "Navigue vers la zone de travaux {} avec contrôle obstacle",
+    "Navigue vers la zone de travaux {} avec contrôle obstacle actif",
+    "Effectue un transit sécurisé vers le km {}",
+    "Navigue sur la section {} en mode inspection obstacle",
+    "Va au point {} en activant la surveillance d'obstacles",
+    "Rejoins la zone {} avec vérification de sécurité continue",
+]
+
+COMPLEX_TPLS = [
+    ("Inspecte la section {} et reviens au dépôt",              xml_inspect_then_return),
+    ("Effectue une inspection complète de {} et envoie un rapport d'alerte", xml_inspect_and_alert),
+    ("Navigue en mode sécurisé vers {} puis effectue une inspection", xml_safe_inspect),
+    ("Effectue une ronde de contrôle entre km {} et km {} avec mesures en 4 points", xml_patrol),
+    ("Certifie la section {} après les travaux de maintenance",  xml_certify),
+    ("Inspecte, mesure et certifie la voie {} avec rapport",     xml_safe_inspect_and_return),
+    ("Contrôle complet de {} : inspection, obstacles, alerte si défaut", xml_inspect_and_alert),
+    ("Patrouille entre km {} et km {} avec rapport final",       xml_patrol),
+    ("Inspecte {} puis reviens automatiquement au dépôt",        xml_inspect_then_return),
+    ("Effectue le contrôle de routine de {} avec certification", xml_certify),
+    ("Inspecte la voie {} en mode sécurisé et renvoie les résultats", xml_safe_inspect_and_return),
+    ("Contrôle post-travaux de la section {} : mesures, validation, alerte", xml_certify),
+    ("Effectue l'inspection d'urgence de la zone {} avec rapport immédiat", xml_inspect_and_alert),
+    ("Réalise une patrouille complète entre km {} et km {} et certifie la voie", xml_patrol),
+    ("Navigue vers {}, inspecte et reviens au point de départ", xml_inspect_then_return),
 ]
 
 
-def gen_safe_navigation(n=15) -> list:
-    examples = []
-    targets = list(range(5, 60, 4))
-    random.shuffle(targets)
-    zones = ["A", "B", "C", "nord", "sud", "maintenance", "urgence"]
-    templates = [xml_safe_nav_fallback, xml_safe_nav_multi_check]
+def km() -> int:
+    return random.randint(0, 99)
 
-    for i in range(n):
-        tmpl_str = random.choice(SAFE_NAV_MISSIONS)
-        if "{}" in tmpl_str:
-            target = random.choice(targets + zones)
-            mission = tmpl_str.format(target)
-        else:
-            mission = tmpl_str
-        xml = random.choice(templates)()
-        examples.append(make_entry(mission, xml))
+def km_pair() -> tuple:
+    a = random.randint(0, 90)
+    return a, a + random.randint(2, 15)
+
+def section() -> str:
+    return random.choice(SECTIONS)
+
+def zone() -> str:
+    return random.choice(["A", "B", "C", "nord", "sud", "maintenance",
+                          "urgence", "test", "critique", str(km())])
+
+
+# ─── Générateurs ─────────────────────────────────────────────────────────────
+
+def gen_navigation(n: int) -> list:
+    templates = [xml_nav_simple, xml_nav_direct, xml_nav_urgency,
+                 xml_nav_return, xml_nav_standby]
+    examples = []
+
+    # Vers un km précis
+    for _ in range(n // 2):
+        verb = random.choice(NAV_VERBS)
+        a, b = km_pair()
+        mission = random.choice([
+            f"{verb} au km {b} depuis le km {a}",
+            f"{verb} au km {b}",
+            f"Va au km {b} en partant du km {a}",
+            f"Rejoins le km {b}",
+            f"Avance de {b - a} km depuis le km {a}",
+        ])
+        examples.append(make_entry(mission, random.choice(templates)()))
+
+    # Vers une cible nommée
+    for _ in range(n - n // 2):
+        verb = random.choice(NAV_VERBS)
+        target = random.choice(NAV_TARGETS + URGENCY_TGTS)
+        mission = random.choice([
+            f"{verb} {target}",
+            f"Déplace-toi vers {target}",
+            f"Rejoins {target} et attends",
+            f"Va à {target}",
+        ])
+        examples.append(make_entry(mission, random.choice(templates)()))
+
     return examples
 
 
-# ─── 5. Missions complexes (20 exemples) ────────────────────────────────────
-
-def xml_inspect_then_return():
-    inner = """    <Sequence name="main_sequence">
-          <GetMission name="get_mission"/>
-          <CalculatePath name="calculate_path"/>
-          <Move name="move_to_zone"/>
-          <ManageMeasurement name="inspection"/>
-          <ManageMeasurement name="inspection_confirm"/>
-          <CalculatePath name="calculate_return_path"/>
-          <Move name="return_to_depot"/>
-          <Decelerate name="decelerate"/>
-          <Stop name="stop"/>
-        </Sequence>"""
-    return wrap_bt(inner)
-
-
-def xml_inspect_and_alert():
-    inner = """    <Sequence name="main_sequence">
-          <GetMission name="get_mission"/>
-          <CalculatePath name="calculate_path"/>
-          <Move name="move_to_zone"/>
-          <ManageMeasurement name="inspection"/>
-          <CheckObstacle name="verify_safety"/>
-          <Alert name="send_report"/>
-          <Stop name="stop"/>
-        </Sequence>"""
-    return wrap_bt(inner)
-
-
-def xml_safe_inspect():
-    """Navigation sécurisée + inspection."""
-    inner = """    <Sequence name="main_sequence">
-          <GetMission name="get_mission"/>
-          <CalculatePath name="calculate_path"/>
-          <Fallback name="safe_approach">
-            <Sequence name="clear_path">
-              <CheckObstacle name="check_obstacle"/>
-              <Move name="move_to_zone"/>
-            </Sequence>
-            <Sequence name="blocked">
-              <Alert name="alert_blocked"/>
-              <Stop name="stop_blocked"/>
-            </Sequence>
-          </Fallback>
-          <Decelerate name="slow_for_inspection"/>
-          <ManageMeasurement name="inspection"/>
-          <Stop name="stop"/>
-        </Sequence>"""
-    return wrap_bt(inner)
-
-
-def xml_patrol():
-    """Patrouille : mesures en plusieurs points."""
-    inner = """    <Sequence name="patrol_sequence">
-          <GetMission name="get_mission"/>
-          <CalculatePath name="calculate_path"/>
-          <Move name="move_to_start"/>
-          <ManageMeasurement name="measure_start"/>
-          <Move name="move_to_mid_1"/>
-          <ManageMeasurement name="measure_mid_1"/>
-          <Move name="move_to_mid_2"/>
-          <ManageMeasurement name="measure_mid_2"/>
-          <Move name="move_to_end"/>
-          <ManageMeasurement name="measure_end"/>
-          <Alert name="send_patrol_report"/>
-          <Stop name="stop"/>
-        </Sequence>"""
-    return wrap_bt(inner)
-
-
-def xml_certify_after_works():
-    inner = """    <Sequence name="certification_sequence">
-          <GetMission name="get_mission"/>
-          <CalculatePath name="calculate_path"/>
-          <Move name="move_to_zone"/>
-          <CheckObstacle name="verify_zone_clear"/>
-          <ManageMeasurement name="measure_before"/>
-          <ManageMeasurement name="measure_after"/>
-          <ManageMeasurement name="measure_confirm"/>
-          <Alert name="certify_section"/>
-          <Stop name="stop"/>
-        </Sequence>"""
-    return wrap_bt(inner)
-
-
-COMPLEX_MISSIONS = [
-    ("Inspecte la section {} et reviens au dépôt", xml_inspect_then_return),
-    ("Effectue une inspection complète de la voie {} et envoie un rapport d'alerte", xml_inspect_and_alert),
-    ("Navigue en mode sécurisé vers la section {} puis effectue une inspection", xml_safe_inspect),
-    ("Effectue une ronde de contrôle entre km {} et km {} avec mesures en 4 points", xml_patrol),
-    ("Certifie la section {} après les travaux de maintenance", xml_certify_after_works),
-    ("Inspecte, mesure et certifie la voie {} en mode sécurisé avec rapport", xml_safe_inspect),
-    ("Contrôle complet de la zone {} : inspection, vérification obstacles, alerte si défaut", xml_inspect_and_alert),
-    ("Patrouille entre km {} et km {} en mode inspection avec rapport final", xml_patrol),
-    ("Inspecte la section {} puis reviens automatiquement au point de départ", xml_inspect_then_return),
-    ("Effectue le contrôle de routine de {} avec certification et rapport", xml_certify_after_works),
-]
-
-
-def gen_complex(n=20) -> list:
+def gen_inspection(n: int) -> list:
+    templates = [xml_inspect_simple, xml_inspect_with_decel,
+                 xml_inspect_multi, xml_inspect_with_check]
     examples = []
-    zones = ["A", "B", "C", "nord", "principale", "maintenance", "urgence"]
-    km_pairs = [(i, i + random.randint(3, 15)) for i in range(0, 50, 5)]
-    random.shuffle(km_pairs)
+    for _ in range(n):
+        verb = random.choice(INSPECT_VERBS)
+        obj  = random.choice(INSPECT_OBJS)
+        a, b = km_pair()
+        location = random.choice([
+            f"entre le km {a} et le km {b}",
+            f"de la section {section()}",
+            f"au km {a}",
+            f"sur {b - a} km depuis le km {a}",
+            f"dans la zone {zone()}",
+            f"au point PK{a}",
+            f"entre les km {a} et {b}",
+        ])
+        mission = random.choice([
+            f"{verb} {obj} {location}",
+            f"{verb} {obj} {location}",
+            f"Effectue une inspection de {obj} {location}",
+            f"Réalise un contrôle de {obj} {location}",
+        ])
+        examples.append(make_entry(mission, random.choice(templates)()))
+    return examples
 
+
+def gen_measurement(n: int) -> list:
+    templates = [xml_measure_simple, xml_measure_with_nav,
+                 xml_measure_multi, xml_measure_3points, xml_measure_and_report]
+    examples = []
+    for _ in range(n):
+        verb  = random.choice(MEASURE_VERBS)
+        mtype = random.choice(MEASURE_TYPES)
+        a, b  = km_pair()
+        nb_pts = random.randint(2, 5)
+        location = random.choice([
+            f"entre le km {a} et le km {b}",
+            f"à la position actuelle",
+            f"au point PK{a}",
+            f"sur {nb_pts} points entre km {a} et km {b}",
+            f"dans la zone {zone()}",
+            f"au km {a}",
+        ])
+        mission = random.choice([
+            f"{verb} {mtype} {location}",
+            f"{verb} {mtype} {location}",
+            f"Enregistre {mtype} {location}",
+            f"Effectue un relevé de {mtype} {location}",
+        ])
+        examples.append(make_entry(mission, random.choice(templates)()))
+    return examples
+
+
+def gen_safe_navigation(n: int) -> list:
+    templates = [xml_safe_nav, xml_safe_nav_with_decel, xml_safe_nav_multi]
+    examples = []
+    for _ in range(n):
+        tpl = random.choice(SAFE_MISSIONS)
+        target = random.choice([str(km()), zone()])
+        mission = tpl.format(target) if "{}" in tpl else tpl
+        examples.append(make_entry(mission, random.choice(templates)()))
+    return examples
+
+
+def gen_complex(n: int) -> list:
+    examples = []
     for i in range(n):
-        mission_tpl, xml_fn = random.choice(COMPLEX_MISSIONS)
-        if mission_tpl.count("{}") == 2:
-            km_s, km_e = km_pairs[i % len(km_pairs)]
-            mission = mission_tpl.format(km_s, km_e)
+        tpl, xml_fn = random.choice(COMPLEX_TPLS)
+        if tpl.count("{}") == 2:
+            a, b = km_pair()
+            mission = tpl.format(a, b)
         else:
-            target = random.choice(zones + [str(km_pairs[i % len(km_pairs)][0])])
-            mission = mission_tpl.format(target)
+            target = random.choice([zone(), section(), str(km())])
+            mission = tpl.format(target)
         examples.append(make_entry(mission, xml_fn()))
     return examples
 
 
-# ─── Assemblage et sauvegarde ─────────────────────────────────────────────────
+# ─── Assemblage & sauvegarde ─────────────────────────────────────────────────
 
 def main():
-    output_dir = Path(__file__).parent
-    output_jsonl = output_dir / "dataset_nav4rail.jsonl"
-    output_json  = output_dir / "dataset_nav4rail.json"
+    import xml.etree.ElementTree as ET
+    output_dir  = Path(__file__).parent
+    out_jsonl   = output_dir / "dataset_nav4rail_500.jsonl"
+    out_json    = output_dir / "dataset_nav4rail_500.json"
 
-    print("Génération du dataset NAV4RAIL (proxy)...")
-    dataset = []
-    dataset += gen_navigation(20)
-    dataset += gen_inspection(25)
-    dataset += gen_measurement(20)
-    dataset += gen_safe_navigation(15)
-    dataset += gen_complex(20)
+    counts = {"Navigation": 100, "Inspection": 125,
+              "Mesures": 100, "Safe nav": 75, "Complexe": 100}
 
+    print("Génération du dataset NAV4RAIL 500 (proxy)...")
+    dataset = (
+        gen_navigation(counts["Navigation"])
+        + gen_inspection(counts["Inspection"])
+        + gen_measurement(counts["Mesures"])
+        + gen_safe_navigation(counts["Safe nav"])
+        + gen_complex(counts["Complexe"])
+    )
     random.shuffle(dataset)
 
-    # Sauvegarde JSONL (format HuggingFace / trl)
-    with open(output_jsonl, "w", encoding="utf-8") as f:
-        for entry in dataset:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-
-    # Sauvegarde JSON lisible
-    with open(output_json, "w", encoding="utf-8") as f:
-        json.dump(dataset, f, ensure_ascii=False, indent=2)
-
-    print(f"Dataset : {len(dataset)} exemples")
-    print(f"  → {output_jsonl}")
-    print(f"  → {output_json}")
-    print()
-    print("Exemples par catégorie :")
-    print(f"  Navigation simple        : 20")
-    print(f"  Inspection de voie       : 25")
-    print(f"  Mesures géométriques     : 20")
-    print(f"  Navigation sécurisée (Fallback obstacle) : 15")
-    print(f"  Missions complexes       : 20")
-    print()
-
-    # Vérification XML
-    import xml.etree.ElementTree as ET
+    # Validation XML
     errors = 0
     for i, entry in enumerate(dataset):
         try:
             ET.fromstring(entry["xml"])
         except ET.ParseError as e:
             print(f"  [ERREUR XML] exemple {i}: {e}")
+            print(entry["xml"])
             errors += 1
-    if errors == 0:
-        print(f"Validation XML : OK — tous les {len(dataset)} exemples sont valides.")
-    else:
-        print(f"Validation XML : {errors} erreurs détectées !")
 
-    # Affiche 3 exemples
-    print("\n── Exemples ────────────────────────────────────────────────────────────")
-    for entry in dataset[:3]:
-        print(f"Mission : {entry['mission']}")
-        print(entry["xml"])
-        print()
+    # Sauvegarde
+    with open(out_jsonl, "w", encoding="utf-8") as f:
+        for entry in dataset:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    with open(out_json, "w", encoding="utf-8") as f:
+        json.dump(dataset, f, ensure_ascii=False, indent=2)
+
+    print(f"\nDataset : {len(dataset)} exemples")
+    for cat, n in counts.items():
+        print(f"  {cat:<20}: {n}")
+    print(f"\nValidation XML : {'OK — 0 erreur' if errors == 0 else f'{errors} ERREURS'}")
+    print(f"  → {out_jsonl}")
+    print(f"  → {out_json}")
+
+    # Exemple d'indentation
+    print("\n── Exemple XML (indentation) ───────────────────────────────────────────")
+    sample = next(e for e in dataset if "Fallback" in e["xml"])
+    print(f"Mission : {sample['mission']}")
+    print(sample["xml"])
 
 
 if __name__ == "__main__":
