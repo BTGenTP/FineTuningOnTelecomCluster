@@ -4,7 +4,7 @@ Fine-tuning QLoRA pour NAV4RAIL — Mission NL → BehaviorTree XML
 Modèle  : Mistral-7B-Instruct-v0.2 (ou TinyLlama-1.1B-Chat pour baseline)
 Méthode : QLoRA (4-bit quantization + LoRA adapters)
 GPU     : Tesla P100-PCIE-16GB (cluster Telecom Paris)
-Dataset : dataset_nav4rail_500.jsonl — 500 paires (mission, XML)
+Dataset : dataset_nav4rail_v3.jsonl — 550 paires (mission, XML)
 
 Usage :
     python finetune_lora_xml.py --model mistral              # Mistral-7B (recommandé)
@@ -47,7 +47,7 @@ MODELS = {
         "max_seq_len": 1024,
         "batch_size": 2,
         "grad_accum": 8,
-        "epochs": 5,
+        "epochs": 8,
         "lr": 2e-4,
     },
     "tinyllama": {
@@ -63,7 +63,7 @@ MODELS = {
     },
 }
 
-DATASET_PATH = Path(__file__).parent / "dataset_nav4rail_500.jsonl"
+DATASET_PATH = Path(__file__).parent / "dataset_nav4rail_v3.jsonl"
 OUTPUT_DIR   = Path(__file__).parent / "outputs"
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -395,6 +395,8 @@ def main():
                         default="mistral", help="Modèle à fine-tuner")
     parser.add_argument("--eval-only", action="store_true",
                         help="Inférence uniquement (charge l'adapter sauvegardé)")
+    parser.add_argument("--zero-shot", action="store_true",
+                        help="Inférence zero-shot : modèle de base sans adapter LoRA")
     parser.add_argument("--adapter-path", type=str, default=None,
                         help="Chemin vers l'adapter LoRA pour --eval-only")
     parser.add_argument("--constrained", action="store_true",
@@ -405,7 +407,23 @@ def main():
     log(f"=== NAV4RAIL Fine-Tuning QLoRA ===")
     log(f"Modèle : {args.model} | Device : {DEVICE} | {mem_info()}")
 
-    if args.eval_only:
+    if args.zero_shot:
+        # Modèle de base, sans aucun adapter — baseline zero-shot
+        cfg = MODELS[args.model]
+        tokenizer = AutoTokenizer.from_pretrained(cfg["hf_id"])
+        tokenizer.pad_token = tokenizer.eos_token
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            cfg["hf_id"],
+            quantization_config=bnb_config,
+            device_map="auto",
+        )
+        log("Modèle de base chargé (zero-shot, sans adapter).")
+    elif args.eval_only:
         # Chargement de l'adapter seul pour inférence
         from peft import PeftModel
         adapter_path = args.adapter_path or str(

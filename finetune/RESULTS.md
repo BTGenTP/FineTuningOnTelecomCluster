@@ -279,6 +279,26 @@ CheckObstacle utilisé hors Fallback dans les missions d'inspection — cas non 
 par le dataset v2 (les 75 exemples "navigation sécurisée" enseignent Fallback, mais pas
 les 125 exemples "inspection" qui n'utilisent pas CheckObstacle + Fallback combinés).
 
+#### Décodage contraint (job SLURM 738232)
+
+Même adapter, même missions, avec `--constrained` (lm-format-enforcer + regex NAV4RAIL).
+
+| Métrique          | Libre (738189) | Contraint (738232) |
+| ----------------- | -------------- | ------------------ |
+| BTs valides       | 10/10          | 10/10              |
+| Score moyen       | 0.97           | 0.97               |
+| Warnings          | 3              | 3 (identiques)     |
+| Durée génération  | ~9 min         | ~3 min             |
+
+Le score est **identique** en mode contraint : la contrainte grammaticale garantit
+l'absence de noms de skills hallucinés (robustesse en production), mais ne corrige pas
+les problèmes d'ordre sémantique (CheckObstacle hors Fallback). Ces corrections
+nécessitent des données d'entraînement, pas une contrainte de décodage.
+
+Observation notable : en mode contraint, la structure interne des Fallback diffère
+légèrement (skills directs au lieu de Sequences imbriquées) car le décodage suit un
+chemin de tokens différent — valide syntaxiquement mais sémantiquement plus plat.
+
 ---
 
 ## Comparaison qualitative
@@ -434,7 +454,8 @@ indiquent la prochaine limite à traiter : le dataset v2 ne couvre pas le patter
 | Mistral-7B sur 500 ex.                                          | ✅ Réalisé   | Loss eval 0.010, score L3 0.97/1.0                                |
 | Validation sémantique L3 (`validate_bt.py`)                     | ✅ Réalisé   | Discrimine TinyLlama / Mistral 100 ex. / Mistral 500 ex.          |
 | Décodage contraint GBNF (`--constrained`)                       | ✅ Implémenté| Zéro hallucination de nom de skill garantie structurellement      |
-| Ajouter pattern "inspection sécurisée" dans le dataset          | À faire      | Corriger les 3 warnings CheckObstacle hors Fallback               |
-| Augmenter les époques (5 → 8)                                   | À faire      | Loss eval potentiellement < 0.008                                 |
-| Évaluation `--constrained` sur l'adapter 738107                 | À faire      | Mesurer l'impact du décodage GBNF sur le score L3                 |
+| Ajouter pattern "inspection sécurisée" dans le dataset          | ✅ Implémenté| 50 ex. v3 — Fallback(CheckObstacle+MM) en contexte inspection     |
+| Augmenter les époques (5 → 8)                                   | ✅ Implémenté| Configuré dans finetune_lora_xml.py                               |
+| Évaluation `--constrained` sur l'adapter 738107                 | ✅ Réalisé   | Score 0.97 identique — confirme que fix = données, pas contrainte |
+| Rerun Mistral-7B — dataset v3 (550 ex.) + 8 époques             | 🔄 En cours  | Corriger les 3 warnings, loss eval < 0.008                        |
 | Intégrer BTs réels SNCF dès réception                           | À faire      | Remplacement progressif du proxy synthétique                      |

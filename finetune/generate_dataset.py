@@ -1,6 +1,6 @@
 """
 Générateur de dataset NAV4RAIL : (prompt mission, BehaviorTree XML)
-Proxy synthétique pour Phase 2 — 500 paires.
+Proxy synthétique pour Phase 2 — 550 paires (v3).
 
 Format XML : BehaviorTree.CPP v4 (BTCPP_format="4")
 Nœuds de contrôle : Sequence, Fallback
@@ -12,7 +12,8 @@ Catégories :
   2. Inspection de voie       (125 ex.)
   3. Mesures géométriques     (100 ex.)
   4. Navigation sécurisée     ( 75 ex.) — Fallback obstacle
-  5. Missions complexes       (100 ex.) — combinées + alertes
+  5. Inspection sécurisée     ( 50 ex.) — Fallback CheckObstacle + ManageMeasurement
+  6. Missions complexes       (100 ex.) — combinées + alertes
 """
 
 import json
@@ -378,6 +379,66 @@ def xml_certify() -> str:
         A("Stop", "stop"),
     ))
 
+def xml_safe_inspect_measure() -> str:
+    """Inspection sécurisée : CheckObstacle dans Fallback avant ManageMeasurement."""
+    return bt(S("inspection_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_zone"),
+        F("safe_inspection",
+            S("zone_clear",
+                A("CheckObstacle", "check_zone"),
+                A("ManageMeasurement", "measure"),
+            ),
+            S("zone_blocked",
+                A("Alert", "alert_blocked"),
+                A("Stop", "stop"),
+            ),
+        ),
+        A("Stop", "stop"),
+    ))
+
+def xml_safe_inspect_multi_measure() -> str:
+    """Inspection sécurisée multi-mesures : CheckObstacle dans Fallback."""
+    return bt(S("inspection_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_zone"),
+        A("Decelerate", "slow_approach"),
+        F("safe_inspection",
+            S("zone_clear",
+                A("CheckObstacle", "check_zone"),
+                A("ManageMeasurement", "measure_1"),
+                A("ManageMeasurement", "measure_2"),
+            ),
+            S("zone_blocked",
+                A("Alert", "alert_obstacle"),
+                A("Stop", "stop"),
+            ),
+        ),
+        A("Stop", "stop"),
+    ))
+
+def xml_safe_inspect_report() -> str:
+    """Inspection sécurisée avec rapport : CheckObstacle dans Fallback + Alert finale."""
+    return bt(S("main_sequence",
+        A("GetMission", "get_mission"),
+        A("CalculatePath", "calculate_path"),
+        A("Move", "move_to_zone"),
+        F("safe_inspection",
+            S("zone_clear",
+                A("CheckObstacle", "check_zone"),
+                A("ManageMeasurement", "inspection"),
+            ),
+            S("zone_blocked",
+                A("Alert", "alert_blocked"),
+                A("Stop", "stop"),
+            ),
+        ),
+        A("Alert", "send_inspection_report"),
+        A("Stop", "stop"),
+    ))
+
 def xml_safe_inspect_and_return() -> str:
     return bt(S("main_sequence",
         A("GetMission", "get_mission"),
@@ -431,6 +492,21 @@ MEASURE_TYPES = ["la géométrie de voie", "le nivellement", "le dévers",
 MEASURE_VERBS = ["Mesure", "Effectue des mesures de", "Enregistre",
                  "Prends des mesures de", "Réalise une mesure de",
                  "Effectue un relevé de"]
+
+SAFE_INSPECT_MISSIONS = [
+    "Inspecte {} en vérifiant les obstacles",
+    "Contrôle {} de manière sécurisée avec gestion obstacle",
+    "Réalise une inspection sécurisée de {}",
+    "Inspecte {} et gère les obstacles si nécessaire",
+    "Effectue l'inspection de {} avec détection d'obstacle",
+    "Inspecte {} en mode sécurisé",
+    "Contrôle {} avec vérification obstacle avant mesure",
+    "Réalise un contrôle sécurisé de {} et envoie un rapport",
+    "Inspecte {} en activant la vérification obstacle",
+    "Effectue une mesure sécurisée de {} avec gestion d'obstacle",
+    "Inspecte {} en vérifiant la voie avant chaque mesure",
+    "Contrôle de sécurité de {} avec inspection et rapport final",
+]
 
 SAFE_MISSIONS = [
     "Navigue en mode sécurisé vers le km {}",
@@ -570,6 +646,32 @@ def gen_measurement(n: int) -> list:
     return examples
 
 
+def gen_safe_inspection(n: int) -> list:
+    """Inspection sécurisée : CheckObstacle DANS un Fallback avant ManageMeasurement."""
+    templates = [xml_safe_inspect_measure, xml_safe_inspect_multi_measure,
+                 xml_safe_inspect_report]
+    examples = []
+    for _ in range(n):
+        tpl = random.choice(SAFE_INSPECT_MISSIONS)
+        obj = random.choice(INSPECT_OBJS)
+        a, b = km_pair()
+        location = random.choice([
+            f"entre le km {a} et le km {b}",
+            f"de la section {section()}",
+            f"au km {a}",
+            f"dans la zone {zone()}",
+            f"au point PK{a}",
+        ])
+        target = random.choice([
+            f"{obj} {location}",
+            f"la section {section()}",
+            f"la zone {zone()}",
+        ])
+        mission = tpl.format(target)
+        examples.append(make_entry(mission, random.choice(templates)()))
+    return examples
+
+
 def gen_safe_navigation(n: int) -> list:
     templates = [xml_safe_nav, xml_safe_nav_with_decel, xml_safe_nav_multi]
     examples = []
@@ -600,18 +702,19 @@ def gen_complex(n: int) -> list:
 def main():
     import xml.etree.ElementTree as ET
     output_dir  = Path(__file__).parent
-    out_jsonl   = output_dir / "dataset_nav4rail_500.jsonl"
-    out_json    = output_dir / "dataset_nav4rail_500.json"
+    out_jsonl   = output_dir / "dataset_nav4rail_v3.jsonl"
+    out_json    = output_dir / "dataset_nav4rail_v3.json"
 
-    counts = {"Navigation": 100, "Inspection": 125,
-              "Mesures": 100, "Safe nav": 75, "Complexe": 100}
+    counts = {"Navigation": 100, "Inspection": 125, "Mesures": 100,
+              "Safe nav": 75, "Inspection sécurisée": 50, "Complexe": 100}
 
-    print("Génération du dataset NAV4RAIL 500 (proxy)...")
+    print("Génération du dataset NAV4RAIL v3 (proxy)...")
     dataset = (
         gen_navigation(counts["Navigation"])
         + gen_inspection(counts["Inspection"])
         + gen_measurement(counts["Mesures"])
         + gen_safe_navigation(counts["Safe nav"])
+        + gen_safe_inspection(counts["Inspection sécurisée"])
         + gen_complex(counts["Complexe"])
     )
     random.shuffle(dataset)
@@ -633,7 +736,7 @@ def main():
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(dataset, f, ensure_ascii=False, indent=2)
 
-    print(f"\nDataset : {len(dataset)} exemples")
+    print(f"\nDataset v3 : {len(dataset)} exemples")
     for cat, n in counts.items():
         print(f"  {cat:<20}: {n}")
     print(f"\nValidation XML : {'OK — 0 erreur' if errors == 0 else f'{errors} ERREURS'}")

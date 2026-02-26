@@ -11,3 +11,5 @@
 *.json
 *.jsonl
 TP_FineTuning_LoRA_Nav4Rail.ipynb
+finetune/logs/*
+finetune/outputs/*

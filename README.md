@@ -1,3 +1,11 @@
+# Fine tuning de modèles de langage sur le cluster de Télécom Paris
+
+Le but de ce document est de fournir un guide étape par étape pour soumettre un job de fine tuning de modèles de langage sur le cluster de Télécom Paris. Nous allons couvrir les étapes nécessaires, depuis la préparation de l'environnement jusqu'à la lecture des résultats.
+
+**Une étude approfondie a été menée sur le fine tuning de LLMs, sur un jeu de données proxy ressemblant de manière très grossière au jeu de données réel (de la SNCF)**. 
+
+Les résultats obtenus sont très encourageants, avec une amélioration significative des performances du modèle après fine tuning.
+
 # Envoyer un job sur le cluster Telecom Paris
 
 ## Prérequis
