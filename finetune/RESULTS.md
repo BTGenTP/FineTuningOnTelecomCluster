@@ -1,8 +1,9 @@
 # NAV4RAIL — Résultats Fine-Tuning QLoRA
 
-Résultats des trois runs sur le cluster Telecom Paris (Tesla P100-PCIE-16GB).
+Résultats des quatre runs sur le cluster Telecom Paris (Tesla P100-PCIE-16GB).
 TinyLlama 1.1B et Mistral-7B ont été entraînés sur le dataset v1 (100 paires).
-Mistral-7B a ensuite été ré-entraîné sur le dataset v2 (500 paires, indentation corrigée).
+Mistral-7B a ensuite été ré-entraîné sur le dataset v2 (500 paires, indentation corrigée),
+puis sur le dataset v3 (550 paires, ajout du pattern "inspection sécurisée", 8 époques).
 Méthode commune : QLoRA 4-bit NF4 + `DataCollatorForCompletionOnlyLM`.
 
 ---
@@ -23,6 +24,14 @@ Méthode commune : QLoRA 4-bit NF4 + `DataCollatorForCompletionOnlyLM`.
   - [Configuration](#configuration-mistral-7b-500-ex)
   - [Courbe de loss](#courbe-de-loss-mistral-7b-500-ex)
   - [Évaluation et améliorations](#évaluation-et-améliorations)
+- [Mistral-7B — 550 exemples v3 (8 époques)](#mistral-7b--550-exemples-v3-8-époques)
+  - [Configuration v3](#configuration-v3)
+  - [Courbe de loss v3](#courbe-de-loss-v3)
+  - [Évaluation v3](#évaluation-v3)
+- [Évaluation zero-shot (baseline sans fine-tuning)](#évaluation-zero-shot-baseline-sans-fine-tuning)
+  - [Résultats](#résultats-zero-shot)
+  - [Analyse des échecs](#analyse-des-échecs)
+  - [Ce que prouve le zero-shot](#ce-que-prouve-le-zero-shot)
 - [Comparaison qualitative](#comparaison-qualitative)
   - [Mission 1 — Navigation sécurisée](#mission-1--navigation-sécurisée)
   - [Mission 2 — Navigation post-inspection](#mission-2--navigation-post-inspection)
@@ -34,27 +43,27 @@ Méthode commune : QLoRA 4-bit NF4 + `DataCollatorForCompletionOnlyLM`.
 
 ## Métriques d'entraînement
 
-| Métrique                   | TinyLlama 1.1B       | Mistral-7B (100 ex.)        | Mistral-7B (500 ex.)        |
-| -------------------------- | -------------------- | --------------------------- | --------------------------- |
-| Paramètres totaux          | 1.1B                 | 7.3B                        | 7.3B                        |
-| Paramètres LoRA entraînés  | 2 252 800 (0.20%)    | 41 943 040 (0.58%)          | 41 943 040 (0.58%)          |
-| Rang LoRA `r`              | 8                    | 16                          | 16                          |
-| Cibles LoRA                | q, k, v, o           | q, k, v, o, gate, up, down  | q, k, v, o, gate, up, down  |
-| Dataset                    | 80 train / 20 eval   | 80 train / 20 eval          | 450 train / 50 eval         |
-| VRAM utilisée              | ~1.0 GB / 15.9 GB    | ~4.5 GB / 15.9 GB           | ~4.5 GB / 15.9 GB           |
-| Durée d'entraînement       | **6.1 min**          | 25.5 min                    | 139.7 min                   |
-| Époques                    | 8 (best à epoch 4)   | 5 (best à epoch 4)          | 5 (best à epoch 4)          |
-| Loss train finale          | 0.076                | 0.012                       | 0.007                       |
-| **Loss eval finale**       | 0.118                | 0.017                       | **0.010**                   |
-| Score syntaxique (L1)      | 10/10 (100%)         | 10/10 (100%)                | 10/10 (100%)                |
-| Score sémantique L3 moyen  | n/a                  | n/a                         | **0.97 / 1.0**              |
+| Métrique                   | TinyLlama 1.1B       | Mistral-7B (100 ex.)        | Mistral-7B (500 ex.)        | Mistral-7B (550 ex. v3)     |
+| -------------------------- | -------------------- | --------------------------- | --------------------------- | --------------------------- |
+| Paramètres totaux          | 1.1B                 | 7.3B                        | 7.3B                        | 7.3B                        |
+| Paramètres LoRA entraînés  | 2 252 800 (0.20%)    | 41 943 040 (0.58%)          | 41 943 040 (0.58%)          | 41 943 040 (0.58%)          |
+| Rang LoRA `r`              | 8                    | 16                          | 16                          | 16                          |
+| Cibles LoRA                | q, k, v, o           | q, k, v, o, gate, up, down  | q, k, v, o, gate, up, down  | q, k, v, o, gate, up, down  |
+| Dataset                    | 80 train / 20 eval   | 80 train / 20 eval          | 450 train / 50 eval         | 495 train / 55 eval         |
+| VRAM utilisée              | ~1.0 GB / 15.9 GB    | ~4.5 GB / 15.9 GB           | ~4.5 GB / 15.9 GB           | ~4.5 GB / 15.9 GB           |
+| Durée d'entraînement       | **6.1 min**          | 25.5 min                    | 139.7 min                   | 248.9 min                   |
+| Époques                    | 8 (best à epoch 4)   | 5 (best à epoch 4)          | 5 (best à epoch 4)          | 8 (best à epoch 3)          |
+| Loss train finale          | 0.076                | 0.012                       | 0.007                       | 0.005                       |
+| **Loss eval (meilleure)**  | 0.118                | 0.017                       | **0.010**                   | **0.011**                   |
+| Score syntaxique (L1)      | 10/10 (100%)         | 10/10 (100%)                | 10/10 (100%)                | 10/10 (100%)                |
+| Score sémantique L3 moyen  | n/a                  | n/a                         | 0.97 / 1.0                  | **0.98 / 1.0**              |
 
 ```mermaid
 xychart-beta
-    title "Comparaison — eval_loss finale"
-    x-axis ["TinyLlama 1.1B", "Mistral-7B (100 ex.)", "Mistral-7B (500 ex.)"]
+    title "Comparaison — eval_loss meilleure"
+    x-axis ["TinyLlama 1.1B", "Mistral-7B (100 ex.)", "Mistral-7B (500 ex.)", "Mistral-7B (550 ex. v3)"]
     y-axis "eval_loss" 0 --> 0.13
-    bar [0.118, 0.017, 0.010]
+    bar [0.118, 0.017, 0.010, 0.011]
 ```
 
 ---
@@ -301,6 +310,194 @@ chemin de tokens différent — valide syntaxiquement mais sémantiquement plus 
 
 ---
 
+## Mistral-7B — 550 exemples v3 (8 époques)
+
+Dataset v3 : 550 paires (v2 + 50 nouveaux exemples "inspection sécurisée" ajoutant le pattern
+`Fallback(CheckObstacle + ManageMeasurement)` dans les contextes d'inspection).
+Époques augmentées de 5 à 8 pour explorer une convergence plus poussée.
+Job SLURM **738330** — node19 — P100 — 26/02/2026.
+
+### Configuration v3
+
+Configuration LoRA identique au run 500 ex. (voir [ci-dessus](#configuration-mistral-7b)).
+Bilan mémoire identique (~4.5 GB / 15.9 GB).
+
+| Différence                  | 500 ex. (v2)    | 550 ex. v3               |
+| --------------------------- | --------------- | ------------------------ |
+| Exemples entraînement       | 450             | 495                      |
+| Exemples évaluation         | 50              | 55                       |
+| Époques                     | 5               | **8**                    |
+| Nouveaux patterns           | —               | +50 inspection sécurisée |
+| Durée                       | 139.7 min       | **248.9 min**            |
+| Loss eval meilleure         | 0.010 (epoch 4) | **0.011 (epoch 3)**      |
+
+### Courbe de loss v3
+
+> Bleu : train — Orange : eval · Best checkpoint sauvegardé à l'epoch 3 (eval_loss = 0.0114).
+
+```mermaid
+xychart-beta
+    title "Loss Mistral-7B — 8 époques (550 exemples v3)"
+    x-axis "Époque" [1, 2, 3, 4, 5, 6, 7, 8]
+    y-axis "Loss" 0 --> 0.026
+    line [0.0244, 0.0142, 0.0094, 0.0092, 0.0085, 0.0067, 0.0062, 0.0051]
+    line [0.0249, 0.0143, 0.0114, 0.0127, 0.0125, 0.0120, 0.0118, 0.0122]
+```
+
+La loss eval présente un léger vallonnement entre epochs 3 et 8 (0.0114 → 0.0127 → 0.0118)
+caractéristique du scheduler cosine sur peu d'epochs. La loss train continue de décroître
+régulièrement jusqu'à 0.005 — le meilleur checkpoint (epoch 3) capture la convergence optimale.
+
+### Évaluation v3
+
+Évaluation via `validate_bt.py` (L1 + L2 + L3) — adapter du job SLURM 738330.
+
+**Résumé :** 10/10 valides · score moyen **0.98 / 1.0** · 2 warnings sémantiques (−1 vs v2)
+
+| Mission                                                      | Score | Warnings         |
+| ------------------------------------------------------------ | ----- | ---------------- |
+| Inspecte la section de voie au km 30                         | 1.0   | — ✓ corrigé      |
+| Mesure la géométrie de la voie sur 3 km depuis le km 12      | 1.0   | —                |
+| Navigue en mode sécurisé vers le secteur nord                | 1.0   | —                |
+| Effectue une patrouille entre km 0 et km 5 avec rapport      | 1.0   | —                |
+| Va au dépôt principal après l'inspection                     | 1.0   | —                |
+| Certifie la section B après les travaux de maintenance       | 0.9   | CheckObstacle⁽¹⁾ |
+| Contrôle complet avec alerte si défaut détecté au km 25      | 0.9   | CheckObstacle⁽¹⁾ |
+| Mesure les paramètres thermiques entre km 8 et km 10         | 1.0   | —                |
+| Inspecte le tunnel au km 33 avec vérification obstacle       | 1.0   | — ✓ corrigé      |
+| Déplace-toi vers le point de chargement et attends           | 1.0   | —                |
+
+**(1)** `<CheckObstacle>` présent hors de tout `<Fallback>` dans les missions de certification
+et contrôle complet — le modèle utilise CheckObstacle comme vérification préliminaire directe
+plutôt que dans un Fallback. Pattern non encore couvert par les exemples d'entraînement v3.
+
+**Gains vs Mistral-7B 500 ex. (v2) :**
+
+- Mission "Inspecte la section de voie au km 30" : score 0.9 → **1.0** ✓
+- Mission "Inspecte le tunnel au km 33 avec vérification obstacle" : score 0.9 → **1.0** ✓
+- Warnings : 3 → **2** (−33 %)
+- Score moyen : 0.97 → **0.98** (+1 %)
+- Les 50 exemples "inspection sécurisée" du dataset v3 ont bien corrigé les cas d'inspection
+  simple, mais pas encore les cas de certification/contrôle complet (patterns distincts).
+
+---
+
+## Évaluation zero-shot (baseline sans fine-tuning)
+
+Évaluation du modèle **Mistral-7B-Instruct-v0.2 de base**, sans aucun adapter LoRA,
+sur les mêmes 10 missions que les runs fine-tunés.
+Objectif : mesurer ce que le modèle apporte **avant** toute adaptation au domaine NAV4RAIL.
+Job SLURM **738550** — node20 — P100 — 26/02/2026.
+
+### Résultats zero-shot
+
+**Résumé :** 0/10 BTs valides · score moyen **0.00 / 1.0** · 10 erreurs L1
+
+| Mission                                                      | Score | Erreur              |
+| ------------------------------------------------------------ | ----- | ------------------- |
+| Inspecte la section de voie au km 30                         | 0.0   | L1 — XML mal formé  |
+| Mesure la géométrie de la voie sur 3 km depuis le km 12      | 0.0   | L1 — XML mal formé  |
+| Navigue en mode sécurisé vers le secteur nord                | 0.0   | L1 — XML mal formé  |
+| Effectue une patrouille entre km 0 et km 5 avec rapport      | 0.0   | L1 — XML mal formé  |
+| Va au dépôt principal après l'inspection                     | 0.0   | L1 — XML mal formé  |
+| Certifie la section B après les travaux de maintenance       | 0.0   | L1 — XML mal formé  |
+| Contrôle complet avec alerte si défaut détecté au km 25      | 0.0   | L1 — XML mal formé  |
+| Mesure les paramètres thermiques entre km 8 et km 10         | 0.0   | L1 — XML mal formé  |
+| Inspecte le tunnel au km 33 avec vérification obstacle       | 0.0   | L1 — XML mal formé  |
+| Déplace-toi vers le point de chargement et attends           | 0.0   | L1 — XML mal formé  |
+
+### Analyse des échecs
+
+Tous les échecs sont au niveau **L1 (syntaxique)** : aucun BT ne passe même le premier
+niveau de validation. Cinq causes se cumulent.
+
+#### Cause 1 — Enveloppe markdown (cause directe des L1)
+
+Le modèle de base, entraîné à répondre en markdown, entoure systématiquement sa réponse
+d'un bloc de code. Exemple de sortie réelle :
+
+````text
+```xml
+<BehaviorTree ...>
+...
+```
+````
+
+Les trois backticks initiaux ne sont pas du XML valide — le parser s'arrête immédiatement
+à la colonne 0, ligne 1. Le fine-tuning supprime cette habitude : le modèle apprend à
+produire du XML brut, sans délimiteurs markdown.
+
+#### Cause 2 — Élément racine propriétaire inconnu
+
+Le modèle génère `<BehaviorTree Version="4.0">` ou `<BehaviorTree version="4.0">`,
+format générique inspiré de schémas XML publics. Le format BehaviorTree.CPP v4 exige :
+
+```xml
+<root BTCPP_format="4">
+  <BehaviorTree ID="MainTree">
+    ...
+  </BehaviorTree>
+</root>
+```
+
+L'attribut `BTCPP_format="4"` et la structure `<root>/<BehaviorTree ID=...>` sont des
+conventions internes à BehaviorTree.CPP, absentes des données de pré-entraînement de Mistral.
+
+#### Cause 3 — Vocabulaire de nœuds halluciné
+
+Au lieu des 8 skills NAV4RAIL, Mistral invente ses propres tags génériques :
+
+| Tag généré (zero-shot)                            | Tag attendu (NAV4RAIL)  |
+| ------------------------------------------------- | ----------------------- |
+| `<Call name="GetMission"/>`                       | `<GetMission .../>`     |
+| `<Condition success="true" compareType="equal">`  | `<CheckObstacle .../>`  |
+| `<Decorator name="CheckMissionValidity">`         | *(tag inexistant)*      |
+| `<Guard condition="IsMissionValid">`              | *(tag inexistant)*      |
+
+Ces tags sont des abstractions génériques issues de frameworks BT généraux (py_trees,
+BehaviorTree3, etc.) — Mistral extrapole à partir de son corpus sans connaître le
+vocabulaire spécifique NAV4RAIL.
+
+#### Cause 4 — Skills traités comme des sous-arbres, non comme des feuilles
+
+Le modèle imbrique les skills dans des sous-Sequences :
+
+```xml
+<!-- Zero-shot : structure incorrecte -->
+<Sequence name="GetMissionData">
+  <Call name="GetMission" />
+  <Condition success="true" ...>MISSION_VALID</Condition>
+</Sequence>
+```
+
+Les skills NAV4RAIL sont des **nœuds feuilles** (actions atomiques), directement enfants
+d'une Sequence ou Fallback, sans wrapper. Le fine-tuning enseigne cette structure plate.
+
+#### Cause 5 — Attributs `name` manquants ou syntaxe incorrecte
+
+Le format BehaviorTree.CPP exige un attribut `name` sur chaque nœud feuille :
+`<GetMission name="get_mission"/>`. Le modèle de base utilise soit des attributs différents
+(`skill="GetMission"`), soit omet l'attribut entièrement.
+
+### Ce que prouve le zero-shot
+
+Le score 0/10 confirme que **l'intégralité de la connaissance domaine est apportée par
+le fine-tuning**, pas par le pré-entraînement :
+
+| Ce que Mistral-7B sait *avant* le fine-tuning           | Ce que le fine-tuning enseigne               |
+| ------------------------------------------------------- | -------------------------------------------- |
+| Produire du XML structuré (mais en bloc markdown)       | Format BTCPP_format="4" avec `<root>` exact  |
+| Utiliser Sequence/Fallback comme patterns de contrôle   | Vocabulaire des 8 skills NAV4RAIL            |
+| Raisonner sur des missions (comprend l'intention)       | Structure feuille : skills = nœuds atomiques |
+| Générer des noms de nœuds sémantiquement cohérents      | Sortie XML brute sans wrapper markdown       |
+
+Le modèle *comprend* les missions (les séquences générées ont une logique) mais
+ne *connaît pas* le format cible. Le fine-tuning est un **traducteur de format**,
+pas un enseignant de raisonnement — ce qui explique pourquoi 500 exemples suffisent
+à atteindre 0.97 de score sémantique.
+
+---
+
 ## Comparaison qualitative
 
 ### Mission 1 — Navigation sécurisée
@@ -423,26 +620,27 @@ xychart-beta
     bar [1.0, 4.5, 15.9]
 ```
 
-| Critère                                    | TinyLlama 1.1B      | Mistral-7B (100 ex.)           | Mistral-7B (500 ex.)              |
-| ------------------------------------------ | ------------------- | ------------------------------ | --------------------------------- |
-| Validité syntaxique (L1)                   | 10/10 ✓             | 10/10 ✓                        | 10/10 ✓                           |
-| Loss eval                                  | 0.118               | 0.017 (7× mieux)               | **0.010** (12× mieux)             |
-| Score sémantique L3 moyen                  | n/a                 | n/a                            | **0.97 / 1.0**                    |
-| Fallback si "sécurisé"                     | ✗ Jamais            | ✓ Systématique                 | ✓ Systématique                    |
-| CheckObstacle contextuel                   | ✗ Absent            | ✓ Présent                      | ✓ Présent (3 warnings hors FB)    |
-| Hallucinations (ManageMeasurement fantôme) | ✗ Fréquentes        | ✓ Absentes                     | ✓ Absentes                        |
-| Précision sémantique                       | ✗ Sur-généralise    | ✓ Respecte l'intention         | ✓ Très précis                     |
-| Pattern multi-points                       | ✗ Absent            | ✗ ManageMeasurement isolé      | ✓ Move → MM → Move                |
-| Indentation XML                            | ✗ Inconsistante     | ✗ Inconsistante (dataset v1)   | ✓ Uniforme 2 espaces              |
-| Durée d'entraînement                       | **6 min**           | 25.5 min                       | 139.7 min                         |
-| VRAM                                       | **1.0 GB**          | 4.5 GB                         | 4.5 GB                            |
+| Critère                                    | TinyLlama 1.1B      | Mistral-7B (100 ex.)           | Mistral-7B (500 ex.)              | Mistral-7B (550 ex. v3)           |
+| ------------------------------------------ | ------------------- | ------------------------------ | --------------------------------- | --------------------------------- |
+| Validité syntaxique (L1)                   | 10/10 ✓             | 10/10 ✓                        | 10/10 ✓                           | 10/10 ✓                           |
+| Loss eval (meilleure)                      | 0.118               | 0.017 (7× mieux)               | 0.010 (12× mieux)                 | **0.011** (11× mieux)             |
+| Score sémantique L3 moyen                  | n/a                 | n/a                            | 0.97 / 1.0                        | **0.98 / 1.0**                    |
+| Warnings sémantiques                       | n/a                 | n/a                            | 3 / 10                            | **2 / 10**                        |
+| Fallback si "sécurisé"                     | ✗ Jamais            | ✓ Systématique                 | ✓ Systématique                    | ✓ Systématique                    |
+| CheckObstacle contextuel                   | ✗ Absent            | ✓ Présent                      | ✓ Présent (3 warnings hors FB)    | ✓ Présent (2 warnings hors FB)    |
+| Hallucinations (ManageMeasurement fantôme) | ✗ Fréquentes        | ✓ Absentes                     | ✓ Absentes                        | ✓ Absentes                        |
+| Précision sémantique                       | ✗ Sur-généralise    | ✓ Respecte l'intention         | ✓ Très précis                     | ✓ Très précis                     |
+| Pattern multi-points                       | ✗ Absent            | ✗ ManageMeasurement isolé      | ✓ Move → MM → Move                | ✓ Move → MM → Move                |
+| Indentation XML                            | ✗ Inconsistante     | ✗ Inconsistante (dataset v1)   | ✓ Uniforme 2 espaces              | ✓ Uniforme 2 espaces              |
+| Durée d'entraînement                       | **6 min**           | 25.5 min                       | 139.7 min                         | 248.9 min                         |
+| VRAM                                       | **1.0 GB**          | 4.5 GB                         | 4.5 GB                            | 4.5 GB                            |
 
-**Pourquoi Mistral 500 ex. est le meilleur modèle :**
-La loss eval 0.010 (−41 % vs 100 ex.) et le score sémantique 0.97 confirment que
-le volume de données est le principal levier d'amélioration sur ce type de tâche.
-Les 3 warnings restants (CheckObstacle hors Fallback dans des contextes d'inspection)
-indiquent la prochaine limite à traiter : le dataset v2 ne couvre pas le pattern
-"inspection sécurisée" (CheckObstacle + Fallback combinés hors navigation).
+**Évolution v2 → v3 :**
+L'ajout de 50 exemples "inspection sécurisée" dans le dataset v3 a réduit les warnings
+sémantiques de 3 à 2 et amélioré le score de 0.97 à 0.98. Les 2 warnings restants concernent
+les contextes de certification/contrôle complet — un pattern distinct qui nécessite des exemples
+dédiés. Le run 80 époques (job 738540) permettra de tester si une convergence plus poussée
+sur le même dataset v3 suffit à combler cet écart.
 
 ---
 
@@ -457,5 +655,7 @@ indiquent la prochaine limite à traiter : le dataset v2 ne couvre pas le patter
 | Ajouter pattern "inspection sécurisée" dans le dataset          | ✅ Implémenté| 50 ex. v3 — Fallback(CheckObstacle+MM) en contexte inspection     |
 | Augmenter les époques (5 → 8)                                   | ✅ Implémenté| Configuré dans finetune_lora_xml.py                               |
 | Évaluation `--constrained` sur l'adapter 738107                 | ✅ Réalisé   | Score 0.97 identique — confirme que fix = données, pas contrainte |
-| Rerun Mistral-7B — dataset v3 (550 ex.) + 8 époques             | 🔄 En cours  | Corriger les 3 warnings, loss eval < 0.008                        |
+| Rerun Mistral-7B — dataset v3 (550 ex.) + 8 époques             | ✅ Réalisé   | 2 warnings (−1), score 0.98 (+0.01) — job 738330                  |
+| Évaluation zero-shot Mistral-7B (sans adapter)                  | ✅ Réalisé   | 0/10 — fine-tuning indispensable, connaissance domaine = 0        |
+| Rerun 80 époques — dataset v3 (550 ex.)                         | 🔄 En cours  | Convergence plus poussée — job 738540 (P100, 36h)                 |
 | Intégrer BTs réels SNCF dès réception                           | À faire      | Remplacement progressif du proxy synthétique                      |

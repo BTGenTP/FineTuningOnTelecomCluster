@@ -152,7 +152,7 @@ def load_model_and_tokenizer(model_key: str):
 
 # ─── Entraînement ────────────────────────────────────────────────────────────
 
-def train(model_key: str):
+def train(model_key: str, epochs_override: int | None = None):
     gc.collect()
     torch.cuda.empty_cache()
 
@@ -172,7 +172,7 @@ def train(model_key: str):
 
     training_args = TrainingArguments(
         output_dir=str(output_path),
-        num_train_epochs=cfg["epochs"],
+        num_train_epochs=epochs_override if epochs_override else cfg["epochs"],
         per_device_train_batch_size=cfg["batch_size"],
         per_device_eval_batch_size=cfg["batch_size"],
         gradient_accumulation_steps=cfg["grad_accum"],
@@ -402,6 +402,8 @@ def main():
     parser.add_argument("--constrained", action="store_true",
                         help="Décodage contraint par grammaire GBNF (nécessite "
                              "lm-format-enforcer)")
+    parser.add_argument("--epochs", type=int, default=None,
+                        help="Surcharge le nombre d'epochs (défaut : config MODELS)")
     args = parser.parse_args()
 
     log(f"=== NAV4RAIL Fine-Tuning QLoRA ===")
@@ -446,7 +448,7 @@ def main():
         model = PeftModel.from_pretrained(base_model, adapter_path)
         log("Adapter LoRA chargé.")
     else:
-        model, tokenizer, _ = train(args.model)
+        model, tokenizer, _ = train(args.model, epochs_override=args.epochs)
 
     evaluate(model, tokenizer, constrained=args.constrained)
     log("Terminé.")
