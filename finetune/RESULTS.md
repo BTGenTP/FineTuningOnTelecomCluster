@@ -28,6 +28,9 @@ Méthode commune : QLoRA 4-bit NF4 + `DataCollatorForCompletionOnlyLM`.
   - [Configuration v3](#configuration-v3)
   - [Courbe de loss v3](#courbe-de-loss-v3)
   - [Évaluation v3](#évaluation-v3)
+- [Mistral-7B — 80 époques (overfitting)](#mistral-7b--80-époques-overfitting)
+  - [Courbe d'overfitting](#courbe-doverfitting)
+  - [Analyse de l'overfitting](#analyse-de-loverfitting)
 - [Évaluation zero-shot (baseline sans fine-tuning)](#évaluation-zero-shot-baseline-sans-fine-tuning)
   - [Résultats](#résultats-zero-shot)
   - [Analyse des échecs](#analyse-des-échecs)
@@ -382,6 +385,67 @@ plutôt que dans un Fallback. Pattern non encore couvert par les exemples d'entr
 
 ---
 
+## Mistral-7B — 80 époques (overfitting)
+
+Run expérimental avec 80 époques sur le même dataset v3 (550 exemples), pour tester si une
+convergence plus poussée améliore le score sémantique. Job SLURM **738540** — node19 — P100.
+**Tué par le time limit (36h) à l'epoch 67/80** — mais les données collectées sont suffisantes
+pour conclure.
+
+### Courbe d'overfitting
+
+> Eval loss uniquement — échantillonnée aux époques clés.
+> Les spikes aux epochs 18 et 24 correspondent à des instabilités de gradient (grad_norm > 2.0).
+
+```mermaid
+xychart-beta
+    title "Eval loss Mistral-7B — 67 époques (550 ex. v3) — overfitting"
+    x-axis "Époque" [1, 5, 9, 15, 18, 20, 24, 30, 40, 50, 60, 67]
+    y-axis "eval_loss" 0 --> 0.075
+    line [0.068, 0.019, 0.012, 0.017, 0.068, 0.023, 0.061, 0.035, 0.042, 0.049, 0.051, 0.051]
+```
+
+| Phase              | Époques | eval_loss       | train_loss      | Comportement                              |
+| ------------------ | ------- | --------------- | --------------- | ----------------------------------------- |
+| Convergence        | 1-9     | 0.068 to 0.012  | 0.077 to 0.009  | Apprentissage normal, meilleur epoch = 9  |
+| Plateau instable   | 10-17   | 0.014 - 0.019   | 0.012 - 0.008   | Oscillations, debut de sur-apprentissage  |
+| Spikes de gradient | 18, 24  | 0.068, 0.061    | 0.044, n/a      | grad_norm > 2.0, instabilite numerique    |
+| Degradation        | 25-40   | 0.025 to 0.042  | 0.015 to 0.001  | Overfitting progressif                    |
+| Plateau degrade    | 40-67   | 0.042 to 0.051  | 0.001 to 0.0002 | Memorisation totale, eval loss x4 vs best |
+
+### Analyse de l'overfitting
+
+Le modèle atteint une eval_loss minimale de **0.012 à l'epoch 9**, quasi identique au run
+8 époques (0.011 à epoch 3). Au-delà, la train_loss continue de décroître jusqu'à ~0
+(mémorisation parfaite du dataset), mais l'eval_loss remonte de manière monotone : le modèle
+perd sa capacité de généralisation.
+
+**Pourquoi 80 époques ne fonctionne pas :**
+
+1. **Ratio données/paramètres trop faible** — 550 exemples pour 42M de paramètres LoRA entraînables.
+   Le modèle a largement assez de capacité pour mémoriser l'intégralité du dataset en ~15 époques.
+   Au-delà, il apprend le bruit (indentation exacte, noms de nœuds spécifiques, ordre exact des
+   exemples) plutôt que les patterns structurels.
+
+2. **Scheduler cosine sur 80 époques** — Le learning rate reste élevé plus longtemps
+   (warmup_ratio=0.05 → 4 époques de warmup au lieu de 0.4). Cela crée les instabilités de
+   gradient observées aux epochs 18 et 24 (grad_norm > 2.0, loss spikes à 0.068).
+
+3. **DataCollator completion-only insuffisant** — Le collator masque l'instruction mais le modèle
+   mémorise quand même les associations exactes mission→XML du dataset. Avec 550 exemples vus
+   80 fois chacun, il sur-apprend les formulations textuelles spécifiques.
+
+**Ce que confirme ce run :**
+
+| Question                                            | Réponse                                    |
+| --------------------------------------------------- | ------------------------------------------ |
+| Plus d'époques = meilleur score ?                   | **Non.** 8-9 époques est optimal.          |
+| Le dataset est-il le bottleneck ?                   | **Oui.** 550 ex. saturent en < 15 époques. |
+| Faut-il plus de données ou plus d'entraînement ?    | **Plus de données.**                       |
+| Le scheduler cosine est-il adapté à 80 époques ?    | **Non.** Instabilités aux epochs 18 et 24. |
+
+---
+
 ## Évaluation zero-shot (baseline sans fine-tuning)
 
 Évaluation du modèle **Mistral-7B-Instruct-v0.2 de base**, sans aucun adapter LoRA,
@@ -657,5 +721,5 @@ sur le même dataset v3 suffit à combler cet écart.
 | Évaluation `--constrained` sur l'adapter 738107                 | ✅ Réalisé   | Score 0.97 identique — confirme que fix = données, pas contrainte |
 | Rerun Mistral-7B — dataset v3 (550 ex.) + 8 époques             | ✅ Réalisé   | 2 warnings (−1), score 0.98 (+0.01) — job 738330                  |
 | Évaluation zero-shot Mistral-7B (sans adapter)                  | ✅ Réalisé   | 0/10 — fine-tuning indispensable, connaissance domaine = 0        |
-| Rerun 80 époques — dataset v3 (550 ex.)                         | 🔄 En cours  | Convergence plus poussée — job 738540 (P100, 36h)                 |
+| Rerun 80 époques — dataset v3 (550 ex.)                         | ✅ Réalisé   | Overfitting : best epoch 9, eval loss x4 au-dela — job 738540     |
 | Intégrer BTs réels SNCF dès réception                           | À faire      | Remplacement progressif du proxy synthétique                      |
