@@ -54,7 +54,7 @@ Deux mécanismes de contrainte, complémentaires :
 #   [...]  classe de caractères (comme regex)
 
 NAV4RAIL_GBNF = r'''# ── NAV4RAIL Behavior Tree Grammar (GBNF) ──────────────────────────────────
-# Génère du XML BehaviorTree.CPP v4 avec uniquement les skills du catalogue.
+# Génère du XML BehaviorTree.CPP v4 avec les 27 skills réels (4 familles).
 # Utilisable avec llama.cpp (--grammar-file) ou llama-cpp-python.
 
 root      ::= "<root BTCPP_format=\"4\">\n  <BehaviorTree ID=\"MainTree\">\n" node+ "  </BehaviorTree>\n</root>"
@@ -71,14 +71,34 @@ child     ::= skill | node
 # Nœuds feuilles (skills — auto-fermants)
 skill     ::= sp "<" skill-tag " name=\"" name "\"/>\n"
 
-skill-tag ::= "GetMission"
-            | "CalculatePath"
+# 27 skills réels NAV4RAIL (4 familles)
+skill-tag ::= "LoadMission"
+            | "MissionStructureValid"
+            | "UpdateCurrentGeneratedActivity"
+            | "ProjectPointOnNetwork"
+            | "CreatePath"
+            | "AgregatePath"
+            | "MissionFullyTreated"
+            | "PassAdvancedPath"
+            | "PassMission"
+            | "GenerateMissionSequence"
+            | "GenerateCorrectiveSubSequence"
+            | "InsertCorrectiveSubSequence"
+            | "MissionTerminated"
+            | "CheckCurrentStepType"
+            | "PassMotionParameters"
             | "Move"
-            | "Decelerate"
-            | "ManageMeasurement"
-            | "CheckObstacle"
-            | "Alert"
-            | "Stop"
+            | "UpdateCurrentExecutedStep"
+            | "Deccelerate"
+            | "MoveAndStop"
+            | "SignalAndWaitForOrder"
+            | "IsRobotPoseProjectionActive"
+            | "ManageMeasurements"
+            | "AnalyseMeasurements"
+            | "MeasurementsQualityValidated"
+            | "PassDefectsLocalization"
+            | "MeasurementsEnforcedValidated"
+            | "SimulationStarted"
 
 # Nom en snake_case
 name      ::= [a-z] ([a-z0-9_])*
@@ -91,8 +111,16 @@ sp        ::= "  " | "    " | "      " | "        " | "          "
 # ─── 2. Pattern regex pour lm-format-enforcer ────────────────────────────────
 
 _SKILL = (
-    "GetMission|CalculatePath|Move|Decelerate"
-    "|ManageMeasurement|CheckObstacle|Alert|Stop"
+    "LoadMission|MissionStructureValid|UpdateCurrentGeneratedActivity"
+    "|ProjectPointOnNetwork|CreatePath|AgregatePath|MissionFullyTreated"
+    "|PassAdvancedPath|PassMission|GenerateMissionSequence"
+    "|GenerateCorrectiveSubSequence|InsertCorrectiveSubSequence"
+    "|MissionTerminated|CheckCurrentStepType|PassMotionParameters"
+    "|Move|UpdateCurrentExecutedStep|Deccelerate|MoveAndStop"
+    "|SignalAndWaitForOrder|IsRobotPoseProjectionActive"
+    "|ManageMeasurements|AnalyseMeasurements|MeasurementsQualityValidated"
+    "|PassDefectsLocalization|MeasurementsEnforcedValidated"
+    "|SimulationStarted"
 )
 _CTRL = "Sequence|Fallback|Parallel"
 _NAME = "[a-z][a-z0-9_]*"

@@ -4,7 +4,7 @@ Fine-tuning QLoRA pour NAV4RAIL — Mission NL → BehaviorTree XML
 Modèle  : Mistral-7B-Instruct-v0.2 (ou TinyLlama-1.1B-Chat pour baseline)
 Méthode : QLoRA (4-bit quantization + LoRA adapters)
 GPU     : Tesla P100-PCIE-16GB (cluster Telecom Paris)
-Dataset : dataset_nav4rail_v3.jsonl — 550 paires (mission, XML)
+Dataset : dataset_nav4rail_v4.jsonl — 550 paires (mission, XML) — 27 skills réels
 
 Usage :
     python finetune_lora_xml.py --model mistral              # Mistral-7B (recommandé)
@@ -44,7 +44,7 @@ MODELS = {
                          "gate_proj", "up_proj", "down_proj"],
         "lora_r": 16,
         "lora_alpha": 32,
-        "max_seq_len": 1024,
+        "max_seq_len": 1536,
         "batch_size": 2,
         "grad_accum": 8,
         "epochs": 8,
@@ -55,7 +55,7 @@ MODELS = {
         "lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj"],
         "lora_r": 8,
         "lora_alpha": 16,
-        "max_seq_len": 1024,
+        "max_seq_len": 1536,
         "batch_size": 4,
         "grad_accum": 4,
         "epochs": 8,
@@ -63,7 +63,7 @@ MODELS = {
     },
 }
 
-DATASET_PATH = Path(__file__).parent / "dataset_nav4rail_v3.jsonl"
+DATASET_PATH = Path(__file__).parent / "dataset_nav4rail_v4.jsonl"
 OUTPUT_DIR   = Path(__file__).parent / "outputs"
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -221,15 +221,42 @@ def train(model_key: str, epochs_override: int | None = None):
 
 # ─── Inférence ───────────────────────────────────────────────────────────────
 
-SKILLS_DOC = """Skills disponibles :
-- GetMission        : Récupère et valide les paramètres de la mission
-- CalculatePath     : Calcule le chemin optimal vers la destination
-- Move              : Déplacement du robot le long de la voie ferrée
-- Decelerate        : Décélération progressive et contrôlée
-- ManageMeasurement : Effectue des mesures (géométrie, alignement, thermique...)
-- CheckObstacle     : Vérifie l'absence d'obstacles sur la voie (retourne SUCCESS si libre)
-- Alert             : Envoie une alerte ou un rapport au système central
-- Stop              : Arrêt complet et sécurisé du robot"""
+SKILLS_DOC = """Skills disponibles (27 skills, 4 familles) :
+
+PREPARATION :
+- LoadMission                    : Charge les paramètres de la mission depuis la source
+- MissionStructureValid          : Vérifie la cohérence structurelle de la mission chargée
+- UpdateCurrentGeneratedActivity : Met à jour l'activité en cours de génération
+- ProjectPointOnNetwork          : Projette un point sur le réseau ferroviaire
+- CreatePath                     : Calcule un chemin entre deux points
+- AgregatePath                   : Fusionne plusieurs segments de chemin
+- MissionFullyTreated            : Vérifie si toutes les étapes sont traitées
+- PassAdvancedPath               : Transmet un chemin avancé au module d'exécution
+- PassMission                    : Transmet la mission au module d'exécution
+- GenerateMissionSequence        : Génère la séquence d'actions pour la mission
+- GenerateCorrectiveSubSequence  : Génère une sous-séquence corrective en cas de déviation
+- InsertCorrectiveSubSequence    : Insère la sous-séquence corrective dans la séquence
+
+MOTION :
+- MissionTerminated              : Vérifie si la mission est terminée (critère d'arrêt)
+- CheckCurrentStepType           : Vérifie le type de l'étape en cours
+- PassMotionParameters           : Configure les paramètres de mouvement
+- Move                           : Déplace le robot vers la cible
+- UpdateCurrentExecutedStep      : Marque l'étape courante comme exécutée
+- Deccelerate                    : Réduit la vitesse du robot
+- MoveAndStop                    : Déplace puis stoppe le robot à la cible
+- SignalAndWaitForOrder           : Émet un signal et attend une autorisation externe
+- IsRobotPoseProjectionActive    : Vérifie si la projection de pose est active
+
+INSPECTION :
+- ManageMeasurements             : Lance et gère l'acquisition des mesures
+- AnalyseMeasurements            : Traite et analyse les données de mesure
+- MeasurementsQualityValidated   : Vérifie si la qualité des mesures est acceptable
+- PassDefectsLocalization        : Transmet la localisation des défauts détectés
+- MeasurementsEnforcedValidated  : Validation stricte de la qualité des mesures
+
+SIMULATION :
+- SimulationStarted              : Vérifie si le mode simulation est actif"""
 
 SYSTEM_PROMPT = (
     "Tu es un expert en robotique ferroviaire NAV4RAIL. "
@@ -257,7 +284,7 @@ def _extract_xml(decoded: str) -> str:
     return raw
 
 
-def generate_xml(model, tokenizer, mission: str, max_new_tokens: int = 600) -> str:
+def generate_xml(model, tokenizer, mission: str, max_new_tokens: int = 800) -> str:
     """Génération XML libre (décodage glouton standard)."""
     prompt = _build_prompt(mission)
     inputs = tokenizer(prompt, return_tensors="pt").to(DEVICE)
@@ -277,7 +304,7 @@ def generate_xml(model, tokenizer, mission: str, max_new_tokens: int = 600) -> s
 
 
 def generate_xml_constrained(model, tokenizer, mission: str,
-                              max_new_tokens: int = 600) -> str:
+                              max_new_tokens: int = 800) -> str:
     """
     Génération XML avec décodage contraint (grammaire GBNF via lm-format-enforcer).
 
@@ -310,16 +337,16 @@ def generate_xml_constrained(model, tokenizer, mission: str,
 # ─── Évaluation ──────────────────────────────────────────────────────────────
 
 TEST_MISSIONS = [
-    "Inspecte la section de voie au km 30",
-    "Mesure la géométrie de la voie sur 3 km depuis le km 12",
-    "Navigue en mode sécurisé vers le secteur nord",
-    "Effectue une patrouille entre km 0 et km 5 avec rapport",
-    "Va au dépôt principal après l'inspection",
-    "Certifie la section B après les travaux de maintenance",
-    "Contrôle complet avec alerte si défaut détecté au km 25",
-    "Mesure les paramètres thermiques entre km 8 et km 10",
-    "Inspecte le tunnel au km 33 avec vérification obstacle",
-    "Déplace-toi vers le point de chargement et attends",
+    "Navigue jusqu'au km 42 depuis le km 10",
+    "Inspecte la voie entre le km 5 et le km 15 avec analyse qualité",
+    "Effectue des mesures de géométrie de voie au point PK30",
+    "Navigue vers le dépôt principal avec autorisation préalable",
+    "Inspecte les rails entre km 20 et km 35 et corrige les défauts détectés",
+    "Simule une inspection complète de la section nord",
+    "Déplace-toi en mode sécurisé vers la zone de maintenance",
+    "Effectue une patrouille d'inspection entre km 0 et km 10 avec mesures",
+    "Inspecte les aiguillages de la section B et reviens au dépôt",
+    "Mesure l'usure des rails entre km 50 et km 60 avec rapport de défauts",
 ]
 
 

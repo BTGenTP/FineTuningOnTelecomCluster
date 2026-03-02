@@ -1,12 +1,13 @@
 """
-Validateur multi-niveaux pour Behavior Trees NAV4RAIL
-======================================================
+Validateur multi-niveaux pour Behavior Trees NAV4RAIL (v4 — 27 skills réels)
+=============================================================================
 
-Niveau 1 — Syntaxique  : XML bien formé, BTCPP_format, tag allowlist, <Stop> présent
+Niveau 1 — Syntaxique  : XML bien formé, BTCPP_format, tag allowlist, <MoveAndStop> présent
 Niveau 2 — Structurel  : Nœuds de contrôle vides, profondeur excessive,
                           structure Fallback (≥ 2 branches), <BehaviorTree> présent
-Niveau 3 — Sémantique  : Ordre des skills (GetMission → CalculatePath → Move),
-                          <Stop> en dernière position, <CheckObstacle> dans <Fallback>
+Niveau 3 — Sémantique  : Ordre des skills (LoadMission en premier),
+                          <MoveAndStop> en dernière position,
+                          Conditions dans <Fallback>
 
 Score :
   1.0  → tous les niveaux passés, aucun avertissement
@@ -27,26 +28,47 @@ from dataclasses import dataclass, field
 # ─── Constantes ───────────────────────────────────────────────────────────────
 
 VALID_TAGS = frozenset({
+    # Structure
     "root", "BehaviorTree", "Sequence", "Fallback", "Parallel",
-    "GetMission", "CalculatePath", "Move", "Decelerate",
-    "ManageMeasurement", "CheckObstacle", "Alert", "Stop",
+    # PREPARATION (12)
+    "LoadMission", "MissionStructureValid", "UpdateCurrentGeneratedActivity",
+    "ProjectPointOnNetwork", "CreatePath", "AgregatePath", "MissionFullyTreated",
+    "PassAdvancedPath", "PassMission", "GenerateMissionSequence",
+    "GenerateCorrectiveSubSequence", "InsertCorrectiveSubSequence",
+    # MOTION (9)
+    "MissionTerminated", "CheckCurrentStepType", "PassMotionParameters",
+    "Move", "UpdateCurrentExecutedStep", "Deccelerate", "MoveAndStop",
+    "SignalAndWaitForOrder", "IsRobotPoseProjectionActive",
+    # INSPECTION (5)
+    "ManageMeasurements", "AnalyseMeasurements", "MeasurementsQualityValidated",
+    "PassDefectsLocalization", "MeasurementsEnforcedValidated",
+    # SIMULATION (1)
+    "SimulationStarted",
 })
 
 CONTROL_NODES = frozenset({"Sequence", "Fallback", "Parallel"})
 
-SKILL_NODES = frozenset({
-    "GetMission", "CalculatePath", "Move", "Decelerate",
-    "ManageMeasurement", "CheckObstacle", "Alert", "Stop",
+SKILL_NODES = VALID_TAGS - {"root", "BehaviorTree"} - CONTROL_NODES
+
+# Conditions : skills qui retournent SUCCESS/FAILURE sans effet de bord
+CONDITION_NODES = frozenset({
+    "MissionStructureValid", "MissionFullyTreated",
+    "MissionTerminated", "CheckCurrentStepType",
+    "IsRobotPoseProjectionActive",
+    "MeasurementsQualityValidated", "MeasurementsEnforcedValidated",
+    "SimulationStarted",
 })
 
 # Précédences partielles : skill → skills qui doivent le précéder
 PREREQUISITES: dict[str, list[str]] = {
-    "CalculatePath": ["GetMission"],
-    "Move":          ["CalculatePath"],
+    "MissionStructureValid":  ["LoadMission"],
+    "CreatePath":             ["ProjectPointOnNetwork"],
+    "AgregatePath":           ["CreatePath"],
+    "GenerateMissionSequence": ["LoadMission"],
 }
 
-MAX_DEPTH  = 10   # profondeur maximale de l'arbre
-MAX_SKILLS = 25   # nombre maximal de nœuds skills
+MAX_DEPTH  = 12   # profondeur maximale (BTs v4 plus profonds)
+MAX_SKILLS = 35   # nombre maximal de nœuds skills (27 skills, répétitions possibles)
 
 
 # ─── Résultat de validation ───────────────────────────────────────────────────
@@ -94,8 +116,8 @@ def _validate_l1(xml_str: str) -> tuple[bool, ET.Element | None, str]:
     if unknown:
         return False, None, f"Tags inconnus / hallucinations : {unknown}"
 
-    if not any(e.tag == "Stop" for e in root.iter()):
-        return False, None, "<Stop> absent — le BT ne se termine jamais"
+    if not any(e.tag == "MoveAndStop" for e in root.iter()):
+        return False, None, "<MoveAndStop> absent — le BT ne se termine jamais"
 
     return True, root, "OK"
 
@@ -157,16 +179,18 @@ def _skills_dfs(elem: ET.Element) -> list[str]:
     return result
 
 
-def _check_obstacle_in_fallback(root: ET.Element) -> bool:
-    """Vérifie qu'au moins un <CheckObstacle> est descendant d'un <Fallback>."""
+def _condition_in_fallback(root: ET.Element) -> set[str]:
+    """Retourne les conditions qui sont bien descendantes d'un <Fallback>."""
+    in_fb = set()
     for fb in root.iter("Fallback"):
-        if any(e.tag == "CheckObstacle" for e in fb.iter()):
-            return True
-    return False
+        for e in fb.iter():
+            if e.tag in CONDITION_NODES:
+                in_fb.add(e.tag)
+    return in_fb
 
 
 def _validate_l3(root: ET.Element, result: ValidationResult):
-    """Vérifications sémantiques : ordre des skills, CheckObstacle, Stop."""
+    """Vérifications sémantiques : ordre des skills, conditions, MoveAndStop."""
     skills = _skills_dfs(root)
     if not skills:
         return
@@ -192,29 +216,37 @@ def _validate_l3(root: ET.Element, result: ValidationResult):
                     f"avant <{prereq}> (pos {first[prereq]})"
                 )
 
-    # <GetMission> doit être en premier
-    if "GetMission" in first and first["GetMission"] != 0:
+    # <LoadMission> doit être le premier skill (sauf SimulationStarted)
+    first_skill = "LoadMission" if "SimulationStarted" not in first else "SimulationStarted"
+    if first_skill in first and first[first_skill] != 0:
         result.warn(
-            f"<GetMission> n'est pas en première position "
-            f"(position {first['GetMission']})"
+            f"<{first_skill}> n'est pas en première position "
+            f"(position {first[first_skill]})"
         )
 
-    # Le dernier <Stop> doit être le dernier skill
-    if "Stop" in first:
-        last_stop = max(i for i, s in enumerate(skills) if s == "Stop")
-        if last_stop < len(skills) - 1:
+    # Le dernier <MoveAndStop> doit être le dernier (ou avant-dernier) skill
+    if "MoveAndStop" in first:
+        last_stop = max(i for i, s in enumerate(skills) if s == "MoveAndStop")
+        # Tolérance : MoveAndStop peut être suivi de SignalAndWaitForOrder
+        if last_stop < len(skills) - 2:
             result.warn(
-                f"<Stop> n'est pas le dernier skill exécuté "
+                f"<MoveAndStop> n'est pas en fin de séquence "
                 f"(position {last_stop}/{len(skills) - 1})"
             )
 
-    # <CheckObstacle> doit être dans un contexte <Fallback>
-    has_check = any(e.tag == "CheckObstacle" for e in root.iter())
-    if has_check and not _check_obstacle_in_fallback(root):
-        result.warn(
-            "<CheckObstacle> présent hors de tout <Fallback> — "
-            "son signal FAILURE ne sera pas intercepté correctement"
-        )
+    # Conditions (MissionTerminated, MissionFullyTreated, etc.) dans un Fallback
+    conditions_present = {e.tag for e in root.iter() if e.tag in CONDITION_NODES}
+    conditions_in_fb = _condition_in_fallback(root)
+    # Exclure les conditions de début de séquence (MissionStructureValid, SimulationStarted,
+    # IsRobotPoseProjectionActive) qui peuvent être hors Fallback
+    loop_conditions = {"MissionTerminated", "MissionFullyTreated",
+                       "MeasurementsQualityValidated", "MeasurementsEnforcedValidated"}
+    for cond in conditions_present & loop_conditions:
+        if cond not in conditions_in_fb:
+            result.warn(
+                f"<{cond}> présent hors de tout <Fallback> — "
+                f"son signal FAILURE ne sera pas intercepté correctement"
+            )
 
 
 # ─── API publique ─────────────────────────────────────────────────────────────

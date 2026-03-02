@@ -35,6 +35,12 @@ Méthode commune : QLoRA 4-bit NF4 + `DataCollatorForCompletionOnlyLM`.
   - [Résultats](#résultats-zero-shot)
   - [Analyse des échecs](#analyse-des-échecs)
   - [Ce que prouve le zero-shot](#ce-que-prouve-le-zero-shot)
+- [Mistral-7B — Dataset v4 (27 skills reels)](#mistral-7b--dataset-v4-27-skills-réels)
+  - [Configuration v4](#configuration-v4)
+  - [Courbe de loss v4](#courbe-de-loss-v4)
+  - [Evaluation v4](#évaluation-v4)
+  - [Analyse qualitative v4](#analyse-qualitative-v4)
+  - [Ameliorations possibles](#améliorations-possibles)
 - [Comparaison qualitative](#comparaison-qualitative)
   - [Mission 1 — Navigation sécurisée](#mission-1--navigation-sécurisée)
   - [Mission 2 — Navigation post-inspection](#mission-2--navigation-post-inspection)
@@ -562,6 +568,201 @@ pas un enseignant de raisonnement — ce qui explique pourquoi 500 exemples suff
 
 ---
 
+## Mistral-7B — Dataset v4 (27 skills réels)
+
+Passage des 8 skills proxy aux **27 skills réels** NAV4RAIL organisés en 4 familles
+(PREPARATION, MOTION, INSPECTION, SIMULATION). Dataset v4 : 550 paires générées à partir
+des patterns du BT réel (`behavior_tree_example.xml`), incluant boucles `Fallback(Condition | Sequence)`,
+validation qualité, sous-séquences correctives et mode simulation.
+Job SLURM **740495** — node20 — P100 — 02/03/2026.
+
+### Configuration v4
+
+Configuration LoRA identique aux runs précédents (voir [ci-dessus](#configuration-mistral-7b)).
+
+| Différence                  | 550 ex. v3 (proxy)  | 550 ex. v4 (réel)            |
+| --------------------------- | ------------------- | ---------------------------- |
+| Skills                      | 8 proxy             | **27 réels (4 familles)**    |
+| Patterns BT                 | Séquences linéaires | **Boucles Fallback/Condition** |
+| max_seq_len                 | 1024                | **1536**                     |
+| Catégories de missions      | 6                   | **8**                        |
+| Durée entraînement          | 248.9 min           | **560.9 min**                |
+| Loss eval meilleure         | 0.011 (epoch 3)     | **0.0035 (epoch 8)**         |
+| Score sémantique L3         | 0.98 / 1.0          | **1.00 / 1.0**               |
+
+Les 8 catégories de missions v4 :
+1. Navigation simple (100 ex.)
+2. Navigation avec autorisation (50 ex.) — `IsRobotPoseProjectionActive` + `SignalAndWaitForOrder`
+3. Inspection de voie (100 ex.) — boucle `MissionFullyTreated` + qualité
+4. Inspection avec corrective (50 ex.) — `GenerateCorrectiveSubSequence` + `InsertCorrectiveSubSequence`
+5. Mesures simples (50 ex.)
+6. Navigation sécurisée (50 ex.) — `MoveAndStop`, signal par segment
+7. Missions complexes (100 ex.) — inspection + retour, patrouille, full corrective
+8. Simulation (50 ex.) — `SimulationStarted` en précondition
+
+### Courbe de loss v4
+
+> Bleu : train — Orange : eval · Best checkpoint sauvegardé à l'epoch 8 (eval_loss = 0.0035).
+> La loss eval décroît de manière monotone sur les 8 époques — aucun signe d'overfitting.
+
+```mermaid
+xychart-beta
+    title "Loss Mistral-7B — 8 époques (550 exemples v4, 27 skills)"
+    x-axis "Époque" [1, 2, 3, 4, 5, 6, 7, 8]
+    y-axis "Loss" 0 --> 0.020
+    line [0.0143, 0.0084, 0.0054, 0.0040, 0.0035, 0.0032, 0.0030, 0.0026]
+    line [0.0175, 0.0099, 0.0061, 0.0045, 0.0044, 0.0039, 0.0036, 0.0035]
+```
+
+| Epoch | train_loss | eval_loss | grad_norm moyen | Observation                        |
+| ----- | ---------- | --------- | --------------- | ---------------------------------- |
+| 1     | 0.0143     | 0.0175    | 0.82            | Convergence rapide                 |
+| 2     | 0.0084     | 0.0099    | 0.14            | Stabilisation des gradients        |
+| 3     | 0.0054     | 0.0061    | 0.06            | Bonne généralisation               |
+| 4     | 0.0040     | 0.0045    | 0.05            | Amélioration continue              |
+| 5     | 0.0035     | 0.0044    | 0.04            | Quasi-plateau                      |
+| 6     | 0.0032     | 0.0039    | 0.04            | Encore du gain                     |
+| 7     | 0.0030     | 0.0036    | 0.03            | Convergence fine                   |
+| 8     | 0.0026     | 0.0035    | 0.03            | Meilleur checkpoint                |
+
+Comparaison avec les runs précédents :
+- **v3 (8 skills, 8 epochs)** : eval_loss vallonnée entre 0.011 et 0.013, best epoch 3
+- **v4 (27 skills, 8 epochs)** : eval_loss monotone décroissante, best epoch 8
+- La courbe v4 ne montre aucune instabilité — les 8 catégories de missions variées
+  et les BTs plus complexes offrent un signal d'apprentissage plus riche, retardant la saturation.
+
+### Évaluation v4
+
+Évaluation via `validate_bt.py` v4 (L1 + L2 + L3, 27 skills) — adapter du job SLURM 740495.
+
+**Résumé : 10/10 valides · score moyen 1.00 / 1.0 · 0 warning**
+
+| Mission                                                                     | Score | Warnings |
+| --------------------------------------------------------------------------- | ----- | -------- |
+| Navigue jusqu'au km 42 depuis le km 10                                      | 1.0   | —        |
+| Inspecte la voie entre le km 5 et le km 15 avec analyse qualité             | 1.0   | —        |
+| Effectue des mesures de géométrie de voie au point PK30                     | 1.0   | —        |
+| Navigue vers le dépôt principal avec autorisation préalable                 | 1.0   | —        |
+| Inspecte les rails entre km 20 et km 35 et corrige les défauts détectés     | 1.0   | —        |
+| Simule une inspection complète de la section nord                           | 1.0   | —        |
+| Déplace-toi en mode sécurisé vers la zone de maintenance                   | 1.0   | —        |
+| Effectue une patrouille d'inspection entre km 0 et km 10 avec mesures      | 1.0   | —        |
+| Inspecte les aiguillages de la section B et reviens au dépôt               | 1.0   | —        |
+| Mesure l'usure des rails entre km 50 et km 60 avec rapport de défauts      | 1.0   | —        |
+
+### Analyse qualitative v4
+
+Le modèle maîtrise les patterns complexes des 27 skills réels :
+
+#### Navigation avec autorisation
+
+Mission : *"Navigue vers le dépôt principal avec autorisation préalable"*
+
+```xml
+<Sequence name="authorized_navigation">
+  <LoadMission name="load_mission"/>
+  <MissionStructureValid name="check_structure"/>
+  <UpdateCurrentGeneratedActivity name="update_activity"/>
+  <ProjectPointOnNetwork name="project_origin"/>
+  <ProjectPointOnNetwork name="project_target"/>
+  <CreatePath name="create_path"/>
+  <AgregatePath name="agregate_path"/>
+  <PassAdvancedPath name="pass_path"/>
+  <PassMission name="pass_mission"/>
+  <GenerateMissionSequence name="generate_sequence"/>
+  <IsRobotPoseProjectionActive name="check_projection"/>
+  <SignalAndWaitForOrder name="wait_authorization"/>
+  <Fallback name="execution_loop">
+    <MissionTerminated name="check_terminated"/>
+    <Sequence name="step_execution">
+      ...
+    </Sequence>
+  </Fallback>
+  <MoveAndStop name="final_stop"/>
+</Sequence>
+```
+
+Le modèle produit la séquence de préparation complète (10 skills),
+la vérification de projection + autorisation, puis la boucle `Fallback(MissionTerminated | step)`.
+
+#### Simulation
+
+Mission : *"Simule une inspection complète de la section nord"*
+
+```xml
+<Sequence name="simulation_full">
+  <SimulationStarted name="check_simulation"/>
+  <LoadMission name="load_mission"/>
+  ...
+  <Fallback name="inspection_loop">
+    <MissionFullyTreated name="check_complete"/>
+    <Sequence name="inspection_step">
+      <Move name="move_to_zone"/>
+      <Deccelerate name="slow_down"/>
+      <ManageMeasurements name="acquire_measurements"/>
+      <AnalyseMeasurements name="analyse_measurements"/>
+      <Fallback name="quality_check">
+        <MeasurementsQualityValidated name="check_quality"/>
+        <Sequence name="handle_defects">
+          <PassDefectsLocalization name="report_defects"/>
+          <GenerateCorrectiveSubSequence name="generate_corrective"/>
+          <InsertCorrectiveSubSequence name="insert_corrective"/>
+        </Sequence>
+      </Fallback>
+      <UpdateCurrentExecutedStep name="update_step"/>
+    </Sequence>
+  </Fallback>
+  <MoveAndStop name="final_stop"/>
+</Sequence>
+```
+
+Le modèle place correctement `SimulationStarted` en précondition, puis enchaîne une boucle
+d'inspection complète avec double Fallback imbriqué (mission loop + quality check + corrective).
+
+### Améliorations possibles
+
+#### 1. Augmenter le nombre d'exemples
+
+La loss eval continue de décroître à epoch 8 sans saturation — contrairement aux runs v3
+où la saturation survenait dès epoch 3. Les BTs v4 sont plus complexes et variés, ce qui
+offre un signal d'apprentissage plus riche. **Augmenter le dataset à 1000-2000 exemples**
+pourrait encore améliorer la généralisation, en particulier sur les patterns rares
+(corrective, simulation).
+
+#### 2. Augmenter les époques à 12-15
+
+La décroissance monotone de eval_loss suggère que 8 époques n'atteignent pas encore la
+saturation. Un run à 12-15 époques pourrait extraire un gain marginal supplémentaire.
+Temps estimé : ~14-17h sur P100.
+
+#### 3. Évaluation sur des missions plus complexes
+
+Les 10 missions de test actuelles couvrent bien les 8 catégories, mais ne testent pas
+les cas limites :
+- Missions ambiguës (mélange navigation + inspection non explicite)
+- Missions hors distribution (skills non vus dans cet ordre)
+- Missions très longues (> 3 étapes d'inspection enchaînées)
+
+#### 4. Passer au format réel complet (Stratégie B)
+
+Le dataset v4 utilise un format **aplati** (tag-as-skill) compatible avec le pipeline
+existant. Le BT réel (`behavior_tree_example.xml`) utilise un format plus riche :
+- `<Action name="MOVE" ID="Move" motion_params="{DataFlowEdge9}"/>`
+- `<Condition name="IS MISSION TERMINATED" ID="MissionTerminated"/>`
+- `<SubTreePlus>` pour la modularité
+- Paramètres blackboard (`{adv_path}`, `{motion_params}`, `{defects}`)
+
+Passer à ce format nécessiterait un nouveau dataset, une grammaire GBNF élargie,
+et un validateur adapté. Ce serait l'étape finale avant intégration dans le système réel.
+
+#### 5. Tester sur un modèle plus petit
+
+Maintenant que le format v4 fonctionne parfaitement sur Mistral-7B, tester sur un modèle
+plus léger (Mistral-3B, Phi-3-mini-4k) pourrait identifier le modèle minimal capable
+de produire des BTs valides avec 27 skills — pertinent pour le déploiement embarqué.
+
+---
+
 ## Comparaison qualitative
 
 ### Mission 1 — Navigation sécurisée
@@ -679,32 +880,33 @@ graph LR
 ```mermaid
 xychart-beta
     title "VRAM utilisée (GB) — P100 = 15.9 GB total"
-    x-axis ["TinyLlama 1.1B", "Mistral-7B", "P100 disponible"]
+    x-axis ["TinyLlama 1.1B", "Mistral-7B (v1-v3)", "Mistral-7B (v4)", "P100 disponible"]
     y-axis "VRAM (GB)" 0 --> 16
-    bar [1.0, 4.5, 15.9]
+    bar [1.0, 4.5, 5.0, 15.9]
 ```
 
-| Critère                                    | TinyLlama 1.1B      | Mistral-7B (100 ex.)           | Mistral-7B (500 ex.)              | Mistral-7B (550 ex. v3)           |
-| ------------------------------------------ | ------------------- | ------------------------------ | --------------------------------- | --------------------------------- |
-| Validité syntaxique (L1)                   | 10/10 ✓             | 10/10 ✓                        | 10/10 ✓                           | 10/10 ✓                           |
-| Loss eval (meilleure)                      | 0.118               | 0.017 (7× mieux)               | 0.010 (12× mieux)                 | **0.011** (11× mieux)             |
-| Score sémantique L3 moyen                  | n/a                 | n/a                            | 0.97 / 1.0                        | **0.98 / 1.0**                    |
-| Warnings sémantiques                       | n/a                 | n/a                            | 3 / 10                            | **2 / 10**                        |
-| Fallback si "sécurisé"                     | ✗ Jamais            | ✓ Systématique                 | ✓ Systématique                    | ✓ Systématique                    |
-| CheckObstacle contextuel                   | ✗ Absent            | ✓ Présent                      | ✓ Présent (3 warnings hors FB)    | ✓ Présent (2 warnings hors FB)    |
-| Hallucinations (ManageMeasurement fantôme) | ✗ Fréquentes        | ✓ Absentes                     | ✓ Absentes                        | ✓ Absentes                        |
-| Précision sémantique                       | ✗ Sur-généralise    | ✓ Respecte l'intention         | ✓ Très précis                     | ✓ Très précis                     |
-| Pattern multi-points                       | ✗ Absent            | ✗ ManageMeasurement isolé      | ✓ Move → MM → Move                | ✓ Move → MM → Move                |
-| Indentation XML                            | ✗ Inconsistante     | ✗ Inconsistante (dataset v1)   | ✓ Uniforme 2 espaces              | ✓ Uniforme 2 espaces              |
-| Durée d'entraînement                       | **6 min**           | 25.5 min                       | 139.7 min                         | 248.9 min                         |
-| VRAM                                       | **1.0 GB**          | 4.5 GB                         | 4.5 GB                            | 4.5 GB                            |
+| Critère                                  | TinyLlama 1.1B   | Mistral-7B (100 ex.) | Mistral-7B (500 ex.) | Mistral-7B (550 v3) | **Mistral-7B (550 v4)**                   |
+| ---------------------------------------- | ----------------- | -------------------- | -------------------- | -------------------- | ----------------------------------------- |
+| **Skills**                               | 8 proxy           | 8 proxy              | 8 proxy              | 8 proxy              | **27 réels NAV4RAIL**                     |
+| Validité syntaxique (L1)                 | 10/10 ✓           | 10/10 ✓              | 10/10 ✓              | 10/10 ✓              | **10/10 ✓**                               |
+| Loss eval (meilleure)                    | 0.118             | 0.017 (7×)           | 0.010 (12×)          | 0.011 (11×)          | **0.0035 (34×)**                          |
+| Score sémantique L3 moyen               | n/a               | n/a                  | 0.97 / 1.0           | 0.98 / 1.0           | **1.00 / 1.0**                            |
+| Warnings sémantiques                    | n/a               | n/a                  | 3 / 10               | 2 / 10               | **0 / 10**                                |
+| Fallback contextuel                      | ✗ Jamais          | ✓ Systématique       | ✓ Systématique       | ✓ Systématique       | ✓ Conditions réelles (MissionTerminated…) |
+| Hallucinations                           | ✗ Fréquentes      | ✓ Absentes           | ✓ Absentes           | ✓ Absentes           | ✓ Absentes                                |
+| Précision sémantique                     | ✗ Sur-généralise  | ✓ Respecte intention | ✓ Très précis        | ✓ Très précis        | ✓ Patterns réels maîtrisés                |
+| Patterns complexes (boucle, corrective)  | ✗ Absent          | ✗ Absent             | ✗ Absent             | ✗ Absent             | **✓ Double Fallback imbriqué**            |
+| Indentation XML                          | ✗ Inconsistante   | ✗ Inconsistante      | ✓ Uniforme 2 esp.   | ✓ Uniforme 2 esp.   | ✓ Uniforme 2 esp.                         |
+| Durée d'entraînement                     | **6 min**         | 25.5 min             | 139.7 min            | 248.9 min            | 560.9 min                                 |
+| VRAM                                     | **1.0 GB**        | 4.5 GB               | 4.5 GB               | 4.5 GB               | 5.0 GB                                    |
 
-**Évolution v2 → v3 :**
-L'ajout de 50 exemples "inspection sécurisée" dans le dataset v3 a réduit les warnings
-sémantiques de 3 à 2 et amélioré le score de 0.97 à 0.98. Les 2 warnings restants concernent
-les contextes de certification/contrôle complet — un pattern distinct qui nécessite des exemples
-dédiés. Le run 80 époques (job 738540) permettra de tester si une convergence plus poussée
-sur le même dataset v3 suffit à combler cet écart.
+**Évolution v3 → v4 :**
+Le passage aux **27 skills réels NAV4RAIL** (au lieu de 8 skills proxy) représente un changement
+majeur. Malgré un vocabulaire 3.4× plus large et des BTs significativement plus complexes
+(boucles Fallback, sous-séquences correctives, double imbrication), le modèle atteint un score
+**parfait de 1.00** avec **0 warning**. La loss eval (0.0035) est 3× meilleure que le meilleur
+run proxy (0.010) et décroît de manière monotone sur 8 époques — aucun signe d'overfitting.
+Le coût est un temps d'entraînement doublé (561 min vs 249 min) dû à `max_seq_len=1536`.
 
 ---
 
@@ -716,10 +918,15 @@ sur le même dataset v3 suffit à combler cet écart.
 | Mistral-7B sur 500 ex.                                          | ✅ Réalisé   | Loss eval 0.010, score L3 0.97/1.0                                |
 | Validation sémantique L3 (`validate_bt.py`)                     | ✅ Réalisé   | Discrimine TinyLlama / Mistral 100 ex. / Mistral 500 ex.          |
 | Décodage contraint GBNF (`--constrained`)                       | ✅ Implémenté| Zéro hallucination de nom de skill garantie structurellement      |
-| Ajouter pattern "inspection sécurisée" dans le dataset          | ✅ Implémenté| 50 ex. v3 — Fallback(CheckObstacle+MM) en contexte inspection     |
-| Augmenter les époques (5 → 8)                                   | ✅ Implémenté| Configuré dans finetune_lora_xml.py                               |
+| Ajouter pattern "inspection sécurisée" dans le dataset          | ✅ Réalisé   | 50 ex. v3 — Fallback(CheckObstacle+MM) en contexte inspection     |
+| Augmenter les époques (5 → 8)                                   | ✅ Réalisé   | Pas d'overfitting sur v4 à 8 époques (loss monotone décroissante) |
 | Évaluation `--constrained` sur l'adapter 738107                 | ✅ Réalisé   | Score 0.97 identique — confirme que fix = données, pas contrainte |
 | Rerun Mistral-7B — dataset v3 (550 ex.) + 8 époques             | ✅ Réalisé   | 2 warnings (−1), score 0.98 (+0.01) — job 738330                  |
 | Évaluation zero-shot Mistral-7B (sans adapter)                  | ✅ Réalisé   | 0/10 — fine-tuning indispensable, connaissance domaine = 0        |
-| Rerun 80 époques — dataset v3 (550 ex.)                         | ✅ Réalisé   | Overfitting : best epoch 9, eval loss x4 au-dela — job 738540     |
-| Intégrer BTs réels SNCF dès réception                           | À faire      | Remplacement progressif du proxy synthétique                      |
+| Rerun 80 époques — dataset v3 (550 ex.)                         | ✅ Réalisé   | Overfitting : best epoch 9, eval loss ×4 au-delà — job 738540     |
+| **Dataset v4 — 27 skills réels NAV4RAIL (550 ex.)**             | ✅ Réalisé   | **Score 1.00, 0 warnings, loss 0.0035 — job 740495**              |
+| Grammaire + validateur adaptés aux 27 skills                    | ✅ Réalisé   | `nav4rail_grammar.py` + `validate_bt.py` mis à jour               |
+| Augmenter dataset v4 à 1000-2000 ex.                            | À faire      | Loss encore en décroissance à epoch 8 — marge d'amélioration      |
+| Passer au format réel complet (Stratégie B)                     | À faire      | `<Action ID="Move"/>` + paramètres blackboard + SubTreePlus       |
+| Tester sur modèle plus petit (Mistral-3B, Phi-3-mini)           | À faire      | Identifier le modèle minimal pour déploiement embarqué            |
+| Évaluation sur missions hors distribution                       | À faire      | Tester la robustesse sur des missions ambiguës / inédites         |
