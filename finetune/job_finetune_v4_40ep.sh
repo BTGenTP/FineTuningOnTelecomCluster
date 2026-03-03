@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=nav4rail_v4
-#SBATCH --output=nav4rail_finetune_v4_%j.out
-#SBATCH --error=nav4rail_finetune_v4_%j.err
+#SBATCH --job-name=nav4rail_v4_40ep
+#SBATCH --output=nav4rail_finetune_v4_40ep_%j.out
+#SBATCH --error=nav4rail_finetune_v4_40ep_%j.err
 #SBATCH --partition=3090
 #SBATCH --gres=gpu:1
 #SBATCH --time=36:00:00
@@ -32,5 +32,5 @@ echo "========================================"
 
 cd ~/code/nav4rail_finetune
 
-echo "[RUN] Fine-tuning Mistral-7B — 15 epochs — dataset v4 (2000 ex., 27 skills réels)"
-python3 finetune_lora_xml.py --model mistral
+echo "[RUN] Fine-tuning Mistral-7B — 40 epochs — dataset v4 (2000 ex., 27 skills réels)"
+python3 finetune_lora_xml.py --model mistral --epochs 40 --output-dir outputs/nav4rail_mistral_lora_40ep

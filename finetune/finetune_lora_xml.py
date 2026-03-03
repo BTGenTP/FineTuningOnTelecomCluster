@@ -4,7 +4,7 @@ Fine-tuning QLoRA pour NAV4RAIL — Mission NL → BehaviorTree XML
 Modèle  : Mistral-7B-Instruct-v0.2 (ou TinyLlama-1.1B-Chat pour baseline)
 Méthode : QLoRA (4-bit quantization + LoRA adapters)
 GPU     : Tesla P100-PCIE-16GB (cluster Telecom Paris)
-Dataset : dataset_nav4rail_v4.jsonl — 550 paires (mission, XML) — 27 skills réels
+Dataset : dataset_nav4rail_v4.jsonl — 2000 paires (mission, XML) — 27 skills réels
 
 Usage :
     python finetune_lora_xml.py --model mistral              # Mistral-7B (recommandé)
@@ -45,9 +45,9 @@ MODELS = {
         "lora_r": 16,
         "lora_alpha": 32,
         "max_seq_len": 1536,
-        "batch_size": 2,
-        "grad_accum": 8,
-        "epochs": 8,
+        "batch_size": 4,
+        "grad_accum": 16,
+        "epochs": 15,
         "lr": 2e-4,
     },
     "tinyllama": {
@@ -58,7 +58,7 @@ MODELS = {
         "max_seq_len": 1536,
         "batch_size": 4,
         "grad_accum": 4,
-        "epochs": 8,
+        "epochs": 15,
         "lr": 3e-4,
     },
 }
@@ -152,14 +152,14 @@ def load_model_and_tokenizer(model_key: str):
 
 # ─── Entraînement ────────────────────────────────────────────────────────────
 
-def train(model_key: str, epochs_override: int | None = None):
+def train(model_key: str, epochs_override: int | None = None, output_dir_override: str | None = None):
     gc.collect()
     torch.cuda.empty_cache()
 
     model, tokenizer, cfg = load_model_and_tokenizer(model_key)
     split = load_dataset(DATASET_PATH)
 
-    output_path = OUTPUT_DIR / f"nav4rail_{model_key}_lora"
+    output_path = Path(output_dir_override) if output_dir_override else OUTPUT_DIR / f"nav4rail_{model_key}_lora"
     output_path.mkdir(parents=True, exist_ok=True)
 
     # Réponse-only loss : on entraîne seulement sur la partie [/INST]...
@@ -337,16 +337,24 @@ def generate_xml_constrained(model, tokenizer, mission: str,
 # ─── Évaluation ──────────────────────────────────────────────────────────────
 
 TEST_MISSIONS = [
+    # --- Missions classiques (couverture de base) ---
     "Navigue jusqu'au km 42 depuis le km 10",
     "Inspecte la voie entre le km 5 et le km 15 avec analyse qualité",
     "Effectue des mesures de géométrie de voie au point PK30",
     "Navigue vers le dépôt principal avec autorisation préalable",
     "Inspecte les rails entre km 20 et km 35 et corrige les défauts détectés",
-    "Simule une inspection complète de la section nord",
-    "Déplace-toi en mode sécurisé vers la zone de maintenance",
-    "Effectue une patrouille d'inspection entre km 0 et km 10 avec mesures",
-    "Inspecte les aiguillages de la section B et reviens au dépôt",
-    "Mesure l'usure des rails entre km 50 et km 60 avec rapport de défauts",
+    # --- Missions complexes / hors distribution ---
+    "Simule une inspection reach-stop de la section critique avec analyse corrective",
+    "Déplace-toi en mode haute sécurité avec arrêt et signal à chaque segment vers la zone d'urgence",
+    "Effectue une patrouille d'inspection entre km 0 et km 25 avec validation stricte à chaque arrêt",
+    "Inspecte les traverses du tunnel nord en mouvement continu puis analyse et corrige les défauts en fin de parcours",
+    "Navigue en multi-segments vers la gare de triage puis mesure l'écartement de voie et reviens au dépôt",
+    # --- Missions ambiguës (intention implicite) ---
+    "Vérifie l'état général de la voie entre km 30 et km 45 après les travaux de maintenance",
+    "Assure-toi que la section B est opérationnelle avant la reprise du trafic",
+    "Prépare la mission, calcule le chemin optimal et inspecte chaque zone avec correction automatique",
+    "Fais le tour complet de la section alpha avec mesures et rapport final",
+    "En simulation, effectue l'inspection intégrale du secteur est avec re-mesure si qualité insuffisante",
 ]
 
 
@@ -431,6 +439,8 @@ def main():
                              "lm-format-enforcer)")
     parser.add_argument("--epochs", type=int, default=None,
                         help="Surcharge le nombre d'epochs (défaut : config MODELS)")
+    parser.add_argument("--output-dir", type=str, default=None,
+                        help="Répertoire de sortie pour l'adapter (défaut : outputs/nav4rail_<model>_lora)")
     args = parser.parse_args()
 
     log(f"=== NAV4RAIL Fine-Tuning QLoRA ===")
@@ -475,7 +485,7 @@ def main():
         model = PeftModel.from_pretrained(base_model, adapter_path)
         log("Adapter LoRA chargé.")
     else:
-        model, tokenizer, _ = train(args.model, epochs_override=args.epochs)
+        model, tokenizer, _ = train(args.model, epochs_override=args.epochs, output_dir_override=args.output_dir)
 
     evaluate(model, tokenizer, constrained=args.constrained)
     log("Terminé.")
