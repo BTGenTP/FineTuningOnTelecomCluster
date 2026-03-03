@@ -1,0 +1,1013 @@
+% ============================================================================
+% NAV4RAIL — Decisions d'architecture
+% Document de référence pour les choix techniques du projet
+% ============================================================================
+\documentclass[a4paper,11pt]{article}
+
+% --- Encodage et langue ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+
+% --- Mise en page ---
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{parskip}            % Espacement entre paragraphes au lieu d'indentation
+\usepackage{setspace}
+\onehalfspacing
+
+% --- Typographie et polices ---
+\usepackage{lmodern}
+\usepackage{microtype}
+
+% --- Tableaux ---
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{tabularx}
+
+% --- Couleurs et liens ---
+\usepackage[dvipsnames]{xcolor}
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=NavyBlue,
+    citecolor=NavyBlue,
+    urlcolor=NavyBlue,
+    pdftitle={NAV4RAIL -- Decisions d'architecture},
+    pdfauthor={Equipe NAV4RAIL},
+}
+
+% --- Code source ---
+\usepackage{listings}
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!8},
+    keywordstyle=\color{NavyBlue}\bfseries,
+    commentstyle=\color{OliveGreen},
+    stringstyle=\color{BrickRed},
+    showstringspaces=false,
+    tabsize=2,
+    xleftmargin=1em,
+    framexleftmargin=0.5em,
+}
+
+% --- Graphiques et diagrammes ---
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, calc, fit}
+
+% --- Listes ---
+\usepackage{enumitem}
+
+% --- Maths (pour formule QLoRA) ---
+\usepackage{amsmath}
+
+% --- En-tete / pied de page ---
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textsc{NAV4RAIL}}
+\fancyhead[R]{\small Decisions d'architecture}
+\fancyfoot[C]{\thepage}
+
+% --- Commandes personnalisees ---
+\newcommand{\file}[1]{\texttt{#1}}
+\newcommand{\skill}[1]{\texttt{<#1/>}}
+\newcommand{\tech}[1]{\textsl{#1}}
+
+% ============================================================================
+\begin{document}
+
+% --- Page de titre ---
+\begin{titlepage}
+\centering
+\vspace*{3cm}
+{\Huge\bfseries NAV4RAIL\par}
+\vspace{0.5cm}
+{\LARGE Decisions d'architecture\par}
+\vspace{1.5cm}
+{\large\itshape Document de reference pour les choix techniques\\
+du pipeline de fine-tuning de Behavior Trees\par}
+\vspace{2cm}
+{\large Equipe NAV4RAIL --- SNCF\par}
+\vspace{1cm}
+{\large\today\par}
+\vfill
+{\small Ce document couvre cinq axes de decision~: jeu de donnees
+synthetique (proxy), rejet du RAG, securite et watchdog, fine-tuning
+LoRA, et evaluation des Behavior Trees.}
+\end{titlepage}
+
+% --- Table des matieres ---
+\tableofcontents
+\newpage
+
+% ============================================================================
+\section{Introduction}
+% ============================================================================
+
+Le projet \textbf{NAV4RAIL} vise a permettre a un operateur de decrire une
+mission ferroviaire en langage naturel, puis de generer automatiquement un
+\textbf{Behavior Tree} (arbre de comportement, ou \textbf{BT}) au format XML
+compatible avec la bibliotheque \textbf{BehaviorTree.CPP v4}. Ces BT
+commandent un robot de maintenance sur le reseau ferre de la SNCF.
+
+Le pipeline repose sur le \textbf{fine-tuning} (ajustement fin) d'un modele
+de langage (\textbf{LLM}, pour \emph{Large Language Model} --- grand modele
+de langage) avec la technique \textbf{QLoRA} (une methode pour entrainer
+seulement une petite fraction des parametres du modele, tout en gardant le
+reste gele et compresse en 4~bits).
+
+Ce document consolide les cinq decisions architecturales majeures du projet~:
+
+\begin{enumerate}
+    \item \textbf{Axe 1 --- Jeu de donnees synthetique (proxy)}~: comment
+    2\,000 exemples d'entrainement ont ete generes a partir d'un seul
+    exemple XML reel.
+    \item \textbf{Axe 2 --- RAG~: analyse et rejet motive}~: pourquoi la
+    recherche augmentee par recuperation de documents (\tech{RAG}) a ete
+    ecartee.
+    \item \textbf{Axe 3 --- Securite et watchdog}~: l'architecture de
+    defense en profondeur a trois couches.
+    \item \textbf{Axe 4 --- Fine-tuning LoRA}~: les choix techniques
+    d'entrainement.
+    \item \textbf{Axe 5 --- Evaluation}~: le validateur a trois niveaux
+    (syntaxe, structure, semantique).
+\end{enumerate}
+
+% --- Glossaire compact ---
+\subsection{Glossaire des termes et acronymes}
+
+\begin{description}[leftmargin=3.5cm, style=nextline]
+    \item[BT] \textbf{Behavior Tree} --- arbre de comportement. Structure
+    arborescente qui decompose une tache complexe en sous-taches (noeuds).
+    Utilise en robotique et dans les jeux video.
+    \item[BehaviorTree.CPP] Bibliotheque C++ de reference pour executer des
+    BT. Le format v4 est le standard XML utilise dans NAV4RAIL.
+    \item[LLM] \textbf{Large Language Model} --- grand modele de langage.
+    Reseau de neurones pre-entraine sur de vastes corpus de texte, capable de
+    generer du texte (ici, du XML).
+    \item[Fine-tuning] Ajustement fin~: on reprend un LLM pre-entraine et on
+    l'entraine sur un petit jeu de donnees specialise pour qu'il apprenne une
+    tache precise.
+    \item[LoRA] \textbf{Low-Rank Adaptation} --- adaptation de rang faible.
+    Technique qui ajoute de petites matrices entrainables a cote des poids
+    geles du modele, reduisant considerablement la memoire requise.
+    \item[QLoRA] \textbf{Quantized LoRA} --- LoRA quantifie. Variante de
+    LoRA ou les poids du modele de base sont comprimes en 4~bits (\tech{NF4},
+    un format de quantification optimise pour les distributions normales des
+    poids). Permet d'entrainer un modele de 7 milliards de parametres sur un
+    GPU de 16~Go.
+    \item[NF4] \textbf{NormalFloat 4-bit} --- format de quantification 4~bits
+    concu pour les poids de reseaux de neurones, dont la distribution suit
+    approximativement une loi normale.
+    \item[RAG] \textbf{Retrieval-Augmented Generation} --- generation
+    augmentee par la recuperation. Architecture ou le modele consulte une base
+    de connaissances externe avant de generer sa reponse.
+    \item[GBNF] \textbf{GGML BNF} --- format de grammaire (derive de la
+    forme Backus-Naur) utilise pour contraindre la generation de texte token
+    par token. Chaque token genere doit respecter la grammaire.
+    \item[SLURM] Gestionnaire de taches pour clusters de calcul.
+    \item[VRAM] Memoire video du GPU. Facteur limitant principal pour
+    l'entrainement de LLM.
+    \item[Proxy (jeu de donnees)] Ici, \emph{proxy} designe le jeu de
+    donnees synthetique qui \emph{remplace} (sert de substitut a) des
+    donnees reelles annotees a la main.
+    \item[Skill] Competence atomique du robot (ex.~: \skill{LoadMission},
+    \skill{Move}). Chaque skill est un noeud feuille dans le BT.
+    \item[Sequence] Noeud de controle du BT~: execute ses enfants de gauche
+    a droite, s'arrete au premier echec.
+    \item[Fallback] Noeud de controle du BT~: essaie ses enfants de gauche
+    a droite, s'arrete au premier succes. Utilise pour les boucles et la
+    gestion d'erreurs.
+\end{description}
+
+% ============================================================================
+\newpage
+\section{Axe 1 --- Jeu de donnees synthetique (proxy)}
+\label{sec:proxy}
+% ============================================================================
+
+\subsection{Contexte}
+
+Le fine-tuning d'un LLM necessite des milliers de paires
+\emph{(mission, BT attendu)}. Or, dans le domaine ferroviaire, il n'existe
+pas de corpus annote de Behavior Trees. Annoter manuellement 2\,000 exemples
+serait extremement couteux et sujet a erreurs humaines.
+
+La question centrale etait~: \textbf{comment obtenir suffisamment de donnees
+d'entrainement a partir d'un seul exemple XML reel fourni par l'equipe
+SNCF~?}
+
+\subsection{Decision}
+
+Generer un \textbf{jeu de donnees synthetique} (le \emph{proxy}) par
+\textbf{composition de patrons} (templates). Un seul exemple reel de
+Behavior Tree a ete decompose en blocs fonctionnels reutilisables, puis
+recombine de multiples facons pour produire 2\,000~paires d'entrainement.
+
+\subsection{Methode de generation}
+
+La generation repose sur trois piliers~:
+
+\subsubsection{Decomposition en blocs fonctionnels}
+
+L'exemple XML reel a ete analyse et decompose en \textbf{blocs
+reutilisables}~:
+
+\begin{itemize}
+    \item \textbf{Blocs de preparation}~: chargement de mission, validation
+    de structure, calcul d'itineraire (\skill{LoadMission} $\rightarrow$
+    \skill{MissionStructureValid} $\rightarrow$
+    \skill{ProjectPointOnNetwork} $\rightarrow$ \skill{CreatePath}
+    $\rightarrow$ \skill{AgregatePath}).
+    \item \textbf{Boucles de mouvement}~: schema
+    \texttt{Fallback(MissionTerminated | Sequence(etape))} --- le robot
+    repete une etape tant que la mission n'est pas terminee.
+    \item \textbf{Blocs d'inspection}~: mesure, analyse, controle qualite
+    avec branchement correctif si la qualite est insuffisante.
+    \item \textbf{Blocs correctifs}~: detection de defauts $\rightarrow$
+    generation de sous-sequence corrective $\rightarrow$ insertion.
+\end{itemize}
+
+Ces blocs sont implementes sous forme de fonctions Python dans le script
+\file{generate\_dataset\_v4.py}, chacune retournant un fragment XML valide.
+
+\subsubsection{Composition en templates}
+
+Les blocs sont assembles en \textbf{templates complets} (environ 50 fonctions
+generatrices)~: chaque template represente un type de mission complet. Par
+exemple~:
+
+\begin{itemize}
+    \item \texttt{xml\_nav\_simple()}~: preparation + boucle de mouvement +
+    arret final.
+    \item \texttt{xml\_inspect\_corrective()}~: preparation + boucle
+    d'inspection avec controle qualite et sequence corrective.
+    \item \texttt{xml\_simulation\_nav()}~: verification de simulation +
+    navigation complete.
+    \item \texttt{xml\_complex\_nav\_measure\_return()}~: navigation
+    multi-segments + mesures + retour au depot.
+\end{itemize}
+
+\subsubsection{Randomisation des missions}
+
+Chaque exemple est unique grace a la \textbf{variation linguistique} des
+descriptions de mission. Le generateur combine aleatoirement~:
+
+\begin{itemize}
+    \item Des \textbf{verbes}~: <<~Deplace-toi~>>, <<~Va~>>,
+    <<~Rejoins~>>, <<~Navigue jusqu'a~>>
+    \item Des \textbf{cibles}~: <<~le depot principal~>>, <<~le poste de
+    maintenance~>>, <<~la zone de stationnement~>>
+    \item Des \textbf{objets d'inspection}~: <<~la voie~>>, <<~les rails~>>,
+    <<~les aiguillages~>>
+    \item Des \textbf{localisations}~: <<~entre le km~15 et le km~28~>>,
+    <<~section~A~>>, <<~tunnel nord~>>
+\end{itemize}
+
+\subsection{Evolution du jeu de donnees}
+
+Le dataset a evolue en quatre versions~:
+
+\begin{table}[h]
+\centering
+\caption{Evolution du jeu de donnees proxy}
+\label{tab:dataset-evolution}
+\begin{tabularx}{\textwidth}{@{}l c c c X@{}}
+\toprule
+\textbf{Version} & \textbf{Exemples} & \textbf{Skills} &
+\textbf{Templates} & \textbf{Apport principal} \\
+\midrule
+v1 & 100 & 8 proxy & $\sim$10 & Premier prototype, indentation
+non uniforme \\
+v2 & 500 & 8 proxy & $\sim$10 & 5 categories, indentation 2~espaces
+uniforme, XML builder \\
+v3 & 550 & 8 proxy & $\sim$10 & +50 exemples <<~inspection
+securisee~>> (Fallback + CheckObstacle) \\
+v4 & 550 & \textbf{27 reels} & $\sim$28 & Remplacement des skills proxy
+par les 27 skills reels NAV4RAIL \\
+v4 scaled & \textbf{2\,000} & \textbf{27 reels} & $\sim$\textbf{50} &
+8 categories, $\sim$50 templates, patterns avances \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\textbf{Le passage v3~$\rightarrow$~v4} est la transition cle~: les 8~skills
+<<~proxy~>> simplifies (ex.~: \texttt{GetMission}, \texttt{CalculatePath})
+ont ete remplaces par les 27~skills reels du systeme NAV4RAIL (ex.~:
+\skill{LoadMission}, \skill{MissionStructureValid},
+\skill{ProjectPointOnNetwork}, etc.).
+
+La correspondance entre skills proxy et skills reels est documentee dans
+\file{SKILLS\_CATALOG.md}. Par exemple~:
+
+\begin{table}[h]
+\centering
+\caption{Correspondance skills proxy $\rightarrow$ skills reels (extrait)}
+\begin{tabular}{@{}l l@{}}
+\toprule
+\textbf{Skill proxy} & \textbf{Skills reels correspondants} \\
+\midrule
+\texttt{GetMission} & \skill{LoadMission} + \skill{MissionStructureValid} \\
+\texttt{CalculatePath} & \skill{ProjectPointOnNetwork} +
+\skill{CreatePath} + \skill{AgregatePath} \\
+\texttt{Move} & \skill{PassMotionParameters} + \skill{Move} (ou
+\skill{MoveAndStop}) \\
+\texttt{ManageMeasurement} & \skill{ManageMeasurements} +
+\skill{AnalyseMeasurements} \\
+\texttt{Stop} & \skill{MissionTerminated} (condition) +
+\skill{MoveAndStop} (action) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Les 8 categories du dataset v4 scaled (2\,000 exemples)}
+
+\begin{table}[h]
+\centering
+\caption{Repartition par categorie dans le dataset v4 scaled}
+\begin{tabular}{@{}r l c l@{}}
+\toprule
+\textbf{\#} & \textbf{Categorie} & \textbf{Exemples} &
+\textbf{Particularite} \\
+\midrule
+1 & Navigation simple & 350 & Preparation + mouvement + arret \\
+2 & Navigation avec autorisation & 150 & +
+\skill{IsRobotPoseProjectionActive} \\
+3 & Inspection de voie & 350 & Boucle mesure/analyse/qualite \\
+4 & Inspection avec corrective & 200 & + sequence corrective si defaut \\
+5 & Mesures simples & 150 & Mouvement + deceleration + mesure \\
+6 & Navigation securisee & 150 & Deceleration + signalisation \\
+7 & Missions complexes & 400 & Combinaisons multi-phases \\
+8 & Simulation & 250 & Prefixe \skill{SimulationStarted} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Justification et limites}
+
+\textbf{Pourquoi cette approche fonctionne~:}
+\begin{itemize}
+    \item Les BT ont une structure \textbf{compositionnelle}~: un nombre
+    fini de blocs se combinent pour couvrir tous les cas d'usage.
+    \item La randomisation linguistique assure que le modele apprend a
+    \emph{comprendre l'intention} de la mission, pas a memoriser des
+    formulations precises.
+    \item Les 27~skills sont \textbf{sans parametre} (hormis l'attribut
+    \texttt{name})~: le modele doit seulement choisir \emph{quels} skills
+    utiliser et dans \emph{quel ordre}, pas deviner des valeurs numeriques.
+\end{itemize}
+
+\textbf{Quand reconsiderer~:}
+\begin{itemize}
+    \item Si les skills deviennent \textbf{parametres} (ex.~:
+    \texttt{sensor="lidar\_3d"}, \texttt{target\_km="8.5"}), la generation
+    synthetique ne suffira plus --- il faudra des exemples reels annotes ou
+    un mecanisme RAG.
+    \item Si le nombre de skills depasse $\sim$50, la combinatoire des
+    templates deviendra difficile a maintenir manuellement.
+\end{itemize}
+
+\textbf{References~:} \file{generate\_dataset\_v4.py},
+\file{SKILLS\_CATALOG.md}.
+
+% ============================================================================
+\newpage
+\section{Axe 2 --- RAG~: analyse et rejet motive}
+\label{sec:rag}
+% ============================================================================
+
+\subsection{Contexte}
+
+Le \textbf{RAG} (\emph{Retrieval-Augmented Generation}, generation augmentee
+par la recuperation) est une architecture populaire ou, avant de generer une
+reponse, le modele consulte une base de connaissances externe pour recuperer
+les informations pertinentes. La question etait~: \textbf{faut-il recuperer
+dynamiquement les skills pertinents a chaque mission, plutot que de tous les
+injecter dans le prompt~?}
+
+\subsection{Decision}
+
+Le RAG a ete \textbf{rejete}. A la place, tous les 27~skills sont injectes
+\emph{statiquement} dans le prompt systeme, et le decodage contraint (GBNF)
+empeche structurellement toute hallucination de skill.
+
+\subsection{Analyse quantitative}
+
+Quatre criteres de decision ont ete evalues~:
+
+\begin{table}[h]
+\centering
+\caption{Criteres de decision Fine-tuning vs.\ RAG}
+\label{tab:rag-criteria}
+\begin{tabular}{@{}l c c c@{}}
+\toprule
+\textbf{Critere} & \textbf{Valeur reelle} & \textbf{Seuil RAG} &
+\textbf{Decision} \\
+\midrule
+Nombre de skills & 27 & $> 50$ & Fine-tuning \\
+Parametres par skill & 1 (\texttt{name}) & $> 1$ & Fine-tuning \\
+Frequence de mise a jour & Stable & $> 1\times$/mois & Fine-tuning \\
+Budget token (27 skills) & $\sim$270 tok ($\sim$7\,\%) & $> 50$\,\% &
+Fine-tuning \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Le calcul est le suivant~: 27~skills $\times$ $\sim$10~tokens par skill
+$\approx$ 270~tokens, ce qui occupe seulement \textbf{7\,\%} de la fenetre
+de contexte de 4\,096~tokens de Mistral-7B. Il reste largement assez de
+place pour le prompt systeme ($\sim$200~tokens), la description de mission
+($\sim$50~tokens), et le BT genere ($\sim$500~tokens).
+
+\subsection{Alternatives ecartees}
+
+Trois alternatives au RAG ont ete examinees et ecartees~:
+
+\begin{description}
+    \item[Option A --- Injection selective par regles] Selection des skills
+    par mots-cles (\emph{<<~si la mission contient `inspecte', injecter les
+    skills d'inspection~>>}). Ecartee car fragile face aux missions ambigues
+    ou multi-categories (ex.~: <<~inspecte et reviens au depot~>>).
+
+    \item[Option B --- Grammaire GBNF etendue] Ajouter de nouveaux skills a
+    la grammaire GBNF au fil du temps. Deja partiellement implementee, mais
+    la maintenance manuelle de la grammaire deviendrait penible au-dela de
+    $\sim$80~skills.
+
+    \item[Option C --- Recuperation d'exemples few-shot] Pour chaque mission
+    de test, recuperer les 2--3 exemples d'entrainement les plus proches et
+    les inclure dans le prompt. Ecartee car cela augmente la longueur du
+    prompt sans apporter de gain mesurable (le modele fine-tune genere deja
+    des BT corrects sans exemples).
+\end{description}
+
+\subsection{Architecture retenue}
+
+L'architecture adoptee combine deux mecanismes~:
+
+\begin{enumerate}
+    \item \textbf{Prompt statique}~: le catalogue complet des 27~skills est
+    injecte dans le prompt systeme ($\sim$270~tokens, 7\,\% du contexte).
+    \item \textbf{Decodage contraint}~: la grammaire GBNF agit comme un
+    <<~RAG au niveau du decodage~>> --- a chaque token genere, seuls les
+    tokens correspondant a des skills valides sont autorises.
+\end{enumerate}
+
+\textbf{Quand reconsiderer~:}
+\begin{itemize}
+    \item Si le nombre de skills depasse $\sim$50 (le budget token
+    depasserait 500 tokens, soit $\sim$12\,\% du contexte --- toujours
+    acceptable, mais la tendance est a surveiller).
+    \item Si les skills deviennent fortement parametres (parametres derives
+    de la mission, ex.~: kilometres, capteurs, seuils).
+    \item Si la frequence de mise a jour depasse 1$\times$/mois (chaque
+    modification necessiterait un re-fine-tuning).
+\end{itemize}
+
+\textbf{References~:} \file{RAG\_ARCHITECTURE.md} (analyse complete),
+\file{SKILLS\_CATALOG.md}, \file{nav4rail\_grammar.py}.
+
+% ============================================================================
+\newpage
+\section{Axe 3 --- Securite et watchdog~: defense en profondeur}
+\label{sec:securite}
+% ============================================================================
+
+\subsection{Contexte}
+
+Les Behavior Trees generes par le LLM commandent un \textbf{robot reel} sur
+le reseau ferre. Un skill hallucine, un noeud manquant ou un ordre
+d'execution incorrect pourrait entrainer un comportement dangereux. La
+strategie de securite doit etre multi-couche~: si une couche laisse passer
+une erreur, la suivante doit la detecter.
+
+\subsection{Decision}
+
+Architecture de \textbf{defense en profondeur a trois couches}~:
+
+\begin{enumerate}
+    \item \textbf{Couche~1} --- Decodage contraint (niveau token)
+    \item \textbf{Couche~2} --- Extraction XML (post-traitement)
+    \item \textbf{Couche~3} --- Validateur a trois niveaux (verification
+    complete)
+\end{enumerate}
+
+\subsection{Vue d'ensemble du pipeline}
+
+% --- Diagramme TikZ du pipeline de securite ---
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+    node distance=1.2cm and 0.5cm,
+    block/.style={rectangle, draw, rounded corners, minimum width=5cm,
+        minimum height=1cm, align=center, font=\small},
+    decision/.style={diamond, draw, aspect=2, minimum width=2.5cm,
+        align=center, font=\small},
+    arrow/.style={-{Stealth[length=3mm]}, thick},
+]
+    % Noeuds
+    \node[block, fill=blue!10] (gen) {LLM genere des tokens};
+    \node[block, fill=orange!15, below=of gen] (c1)
+        {\textbf{Couche 1}~: Grammaire GBNF\\
+        Seuls les tokens valides sont autorises};
+    \node[block, fill=yellow!15, below=of c1] (c2)
+        {\textbf{Couche 2}~: Extraction XML\\
+        Isole \texttt{<root>...</root>} par regex};
+    \node[block, fill=green!10, below=of c2] (c3)
+        {\textbf{Couche 3}~: Validateur L1+L2+L3\\
+        Syntaxe, structure, semantique};
+    \node[block, fill=green!25, below left=1.5cm and -0.5cm of c3] (ok)
+        {BT valide (score 0.5--1.0)};
+    \node[block, fill=red!15, below right=1.5cm and -0.5cm of c3] (ko)
+        {BT rejete (score 0.0)};
+
+    % Fleches
+    \draw[arrow] (gen) -- (c1);
+    \draw[arrow] (c1) -- (c2);
+    \draw[arrow] (c2) -- (c3);
+    \draw[arrow] (c3) -- node[left, font=\small] {valide} (ok);
+    \draw[arrow] (c3) -- node[right, font=\small] {invalide} (ko);
+\end{tikzpicture}
+\caption{Pipeline de defense en profondeur a trois couches}
+\label{fig:pipeline-securite}
+\end{figure}
+
+\subsection{Couche 1~: Decodage contraint (niveau token)}
+
+Le decodage contraint empeche le LLM de generer des tokens qui violeraient
+la grammaire. A \textbf{chaque etape de generation}~:
+
+\begin{enumerate}
+    \item Le modele propose une distribution de probabilites sur tous les
+    tokens possibles.
+    \item La fonction \texttt{prefix\_allowed\_tokens\_fn} verifie quels
+    tokens sont compatibles avec la grammaire GBNF.
+    \item Les tokens \textbf{incompatibles} recoivent un score de
+    $-\infty$ (ils ne seront jamais choisis).
+    \item Le modele choisit parmi les tokens \textbf{restants} uniquement.
+\end{enumerate}
+
+\textbf{Implementation~:} Le fichier \file{nav4rail\_grammar.py} definit~:
+\begin{itemize}
+    \item \texttt{NAV4RAIL\_GBNF}~: la grammaire au format GBNF, listant
+    explicitement les 27~noms de skills autorises.
+    \item \texttt{get\_prefix\_fn(tokenizer)}~: cree la fonction de
+    contrainte en utilisant la bibliotheque
+    \tech{lm-format-enforcer}\footnote{\tech{lm-format-enforcer}~: une
+    bibliotheque Python qui transforme une expression reguliere ou une
+    grammaire GBNF en contrainte token par token compatible avec
+    Hugging~Face \texttt{model.generate()}.}, qui convertit un
+    \texttt{RegexParser} en \texttt{prefix\_allowed\_tokens\_fn}.
+\end{itemize}
+
+\textbf{Garantie~:} \emph{Zero hallucination de nom de skill}. Il est
+\textbf{structurellement impossible} pour le modele de generer un tag XML
+qui ne soit pas dans le catalogue des 27~skills.
+
+\textbf{Limite~:} La grammaire GBNF ne peut pas verifier l'equilibrage
+des balises (propriete \emph{context-sensitive}, hors de portee d'une
+grammaire reguliere). Cette verification est deleguee a la Couche~3.
+
+\subsection{Couche 2~: Extraction XML (post-traitement)}
+
+Apres la generation, le texte brut peut contenir des artefacts (texte
+avant ou apres le XML, repetitions). La fonction \texttt{\_extract\_xml()}
+(\file{finetune\_lora\_xml.py}, lignes 275--284) isole le bloc XML valide~:
+
+\begin{lstlisting}[language=Python]
+pattern = r"(<root\b.*?</root>)"
+match = re.search(pattern, raw_output, re.DOTALL)
+xml_str = match.group(1) if match else raw_output
+\end{lstlisting}
+
+Cette etape est simple mais essentielle~: elle garantit que seul le contenu
+entre \texttt{<root>} et \texttt{</root>} est transmis au validateur.
+
+\subsection{Couche 3~: Validateur a trois niveaux}
+
+Le fichier \file{validate\_bt.py} implemente un validateur en trois
+niveaux, detaille dans la section~\ref{sec:evaluation}.
+
+\textbf{Scoring~:}
+\begin{itemize}
+    \item \textbf{1.0}~: parfait (les 3 niveaux passes, aucun avertissement).
+    \item \textbf{0.5--0.9}~: valide avec avertissements
+    ($-0.1$ par avertissement, plancher a 0.5).
+    \item \textbf{0.0}~: invalide (erreur bloquante au niveau L1 ou L2).
+\end{itemize}
+
+\textbf{References~:} \file{nav4rail\_grammar.py},
+\file{validate\_bt.py}, \file{finetune\_lora\_xml.py} (lignes 275--284).
+
+% ============================================================================
+\newpage
+\section{Axe 4 --- Fine-tuning LoRA~: choix techniques}
+\label{sec:lora}
+% ============================================================================
+
+\subsection{Contexte}
+
+L'objectif est d'entrainer le modele \textbf{Mistral-7B-Instruct-v0.2}
+(7,3 milliards de parametres) sur un cluster equipe de GPU
+\textbf{Tesla P100} (16~Go de VRAM) et \textbf{RTX~3090} (24~Go de VRAM).
+
+\textbf{Probleme~:} un fine-tuning complet (tous les parametres) de
+Mistral-7B necessite environ 56~Go de VRAM --- c'est-a-dire $3.5\times$ la
+capacite d'un P100. La solution est \textbf{QLoRA}.
+
+\subsection{Decision~: QLoRA 4-bit NF4}
+
+Au lieu de modifier les 7,3 milliards de parametres, QLoRA~:
+
+\begin{enumerate}
+    \item \textbf{Quantifie} les poids du modele de base en 4~bits NF4
+    (poids \textbf{geles}, non modifies pendant l'entrainement).
+    \item \textbf{Ajoute} de petites matrices entrainables (\emph{adaptateurs
+    LoRA}) a cote des poids geles.
+\end{enumerate}
+
+La formule de sortie effective est~:
+
+\begin{equation}
+\mathbf{y} = \underbrace{W_0^{\text{4-bit, gele}}}_{\text{modele de base}}
+\cdot \mathbf{x}
+\;+\;
+\underbrace{\frac{\alpha}{r} \cdot B \cdot A}_{\text{adaptateur LoRA}}
+\cdot \mathbf{x}
+\end{equation}
+
+ou $W_0$ est la matrice de poids originale (gelee en 4~bits), $A$ et $B$
+sont les petites matrices entrainables de rang $r$, et $\alpha$ est le
+facteur d'echelle.
+
+\subsection{Parametres d'entrainement}
+
+\begin{table}[h]
+\centering
+\caption{Configuration QLoRA pour Mistral-7B}
+\label{tab:qlora-config}
+\begin{tabular}{@{}l l p{6cm}@{}}
+\toprule
+\textbf{Parametre} & \textbf{Valeur} & \textbf{Explication} \\
+\midrule
+Quantification & 4-bit NF4 + double quant & Poids comprimes en 4~bits,
+seconde quantification pour les constantes \\
+Rang LoRA ($r$) & 16 & Dimension des matrices $A$ et $B$ --- compromis
+entre expressivite et taille \\
+Alpha LoRA ($\alpha$) & 32 & Facteur d'echelle ($\alpha/r = 2$), amplifie
+l'influence des adaptateurs \\
+Modules cibles & 7 (q, k, v, o, gate, up, down) & Toutes les projections
+d'attention + couches MLP \\
+Params.\ entrainables & 42\,M (0.58\,\% de 7.3\,B) & Seule cette
+fraction est modifiee pendant l'entrainement \\
+Optimiseur & \texttt{paged\_adamw\_8bit} & AdamW en 8~bits avec pagination
+memoire (reduit la VRAM) \\
+Planificateur LR & Cosine + 5\,\% warmup & Taux d'apprentissage decroit en
+cosinus apres un echauffement \\
+Taux d'apprentissage & $2 \times 10^{-4}$ & Valeur standard pour QLoRA \\
+Masquage de la perte & \texttt{DataCollator\-ForCompletion\-OnlyLM} &
+La perte n'est calculee \emph{que} sur la reponse XML (apres le token
+\texttt{[/INST]}), pas sur le prompt \\
+Taille de batch effective & 64 (4 $\times$ 16) & 4 exemples par GPU
+$\times$ 16 accumulations de gradient \\
+Longueur max sequence & 1\,536 tokens & Couvre le prompt + BT genere
+(augmente depuis 1\,024 en v4) \\
+VRAM utilisee & $\sim$5.0~Go / 15.9~Go (P100) & $\sim$31\,\% de la
+capacite \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Importance du masquage de la perte}
+
+Le \texttt{DataCollatorForCompletionOnlyLM} est un choix crucial~: il masque
+la perte (\emph{loss}) sur toute la partie \emph{instruction} du prompt
+(avant le token \texttt{[/INST]}). Le modele n'apprend \textbf{que} a
+generer le XML, pas a repeter le prompt systeme ou la description de mission.
+
+\textbf{Impact mesure~:} convergence $2\times$ plus rapide. Sans ce
+masquage, la perte d'evaluation (\emph{eval\_loss}) stagnait a $\sim$0.05~;
+avec le masquage, elle descend a 0.017 des la premiere version.
+
+\subsection{Choix du modele}
+
+\begin{description}
+    \item[Mistral-7B-Instruct-v0.2] Modele principal. Format d'instruction
+    natif \texttt{[INST]...[/INST]}, bonnes performances en generation
+    structuree. 7,3 milliards de parametres.
+    \item[TinyLlama-1.1B-Chat] Modele de reference (\emph{baseline}).
+    1,1 milliard de parametres, 6~minutes d'entrainement. Utile pour valider
+    le pipeline avant de lancer un entrainement long sur Mistral.
+\end{description}
+
+\subsection{Resultats}
+
+\begin{table}[h]
+\centering
+\caption{Evolution des performances par version du dataset}
+\label{tab:resultats}
+\begin{tabular}{@{}l c c c c c@{}}
+\toprule
+\textbf{Configuration} & \textbf{Eval loss} & \textbf{Score L3} &
+\textbf{Warnings} & \textbf{Temps} & \textbf{GPU} \\
+\midrule
+TinyLlama, 100 ex. & 0.118 & n/a & --- & 6 min & P100 \\
+Mistral, 100 ex. & 0.017 & n/a & --- & 25 min & P100 \\
+Mistral, 500 ex.\ (v2) & 0.010 & 0.97 & 3/10 & 140 min & P100 \\
+Mistral, 550 ex.\ (v3) & 0.011 & 0.98 & 2/10 & 249 min & P100 \\
+Mistral, 550 ex.\ (v4) & \textbf{0.0035} & \textbf{1.00} & \textbf{0/10}
+& 561 min & P100 \\
+Mistral, 2\,000 ex.\ (v4 sc.) & 0.0048 & \textbf{1.00} & \textbf{0/15}
+& 684 min & RTX 3090 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Observation cle~:} le passage aux 27~skills reels (v4) a ameliore
+le score semantique de 0.98 a \textbf{1.00} malgre la complexite accrue, car
+les patterns des skills reels sont plus reguliers que ceux des 8~skills
+proxy simplifies.
+
+\textbf{References~:} \file{finetune\_lora\_xml.py} (lignes 40--64 pour la
+configuration), \file{generate\_dataset\_v4.py}, \file{RESULTS.md}.
+
+% ============================================================================
+\newpage
+\section{Axe 5 --- Evaluation~: syntaxe, structure, semantique}
+\label{sec:evaluation}
+% ============================================================================
+
+\subsection{Contexte}
+
+Un simple \emph{parse} XML (verification syntaxique) est insuffisant~: un
+XML syntaxiquement correct peut representer un BT structurellement incoherent
+ou semantiquement dangereux. Il faut pouvoir \textbf{discriminer la qualite}
+entre des BT valides (score 0.97 vs.\ 1.0) pour guider l'amelioration du
+dataset et du modele.
+
+\subsection{Decision}
+
+Validateur a \textbf{trois niveaux} implementes dans
+\file{validate\_bt.py}~:
+
+% --- Diagramme TikZ du validateur ---
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+    node distance=1.5cm,
+    block/.style={rectangle, draw, rounded corners, minimum width=6cm,
+        minimum height=1.2cm, align=center, font=\small},
+    fail/.style={rectangle, draw, fill=red!15, minimum width=2.5cm,
+        minimum height=0.8cm, align=center, font=\small},
+    warn/.style={rectangle, draw, fill=yellow!15, minimum width=2.5cm,
+        minimum height=0.8cm, align=center, font=\small},
+    ok/.style={rectangle, draw, fill=green!20, minimum width=2.5cm,
+        minimum height=0.8cm, align=center, font=\small},
+    arrow/.style={-{Stealth[length=3mm]}, thick},
+]
+    \node[block, fill=blue!10] (l1) {\textbf{L1 --- Syntaxique}\\
+    Parse XML, \texttt{<root>}, format v4, tag allowlist};
+    \node[fail, right=2cm of l1] (f1) {Score = 0.0};
+    \node[block, fill=blue!10, below=of l1] (l2) {\textbf{L2 ---
+    Structurel}\\
+    \texttt{<BehaviorTree>}, profondeur $\leq$ 12, Fallback $\geq$ 2};
+    \node[fail, right=2cm of l2] (f2) {Score = 0.0};
+    \node[block, fill=blue!10, below=of l2] (l3) {\textbf{L3 ---
+    Semantique}\\
+    Prerequis, ordres, conditions dans Fallback};
+    \node[warn, right=2cm of l3] (w3) {$-0.1$ / warning};
+    \node[ok, below=of l3] (ok) {Score final (0.5--1.0)};
+
+    \draw[arrow] (l1) -- node[above, font=\footnotesize] {echec} (f1);
+    \draw[arrow] (l1) -- node[left, font=\footnotesize] {OK} (l2);
+    \draw[arrow] (l2) -- node[above, font=\footnotesize] {echec} (f2);
+    \draw[arrow] (l2) -- node[left, font=\footnotesize] {OK} (l3);
+    \draw[arrow] (l3) -- node[above, font=\footnotesize] {warnings} (w3);
+    \draw[arrow] (l3) -- node[left, font=\footnotesize] {OK} (ok);
+    \draw[arrow] (w3) |- (ok);
+\end{tikzpicture}
+\caption{Flux de validation a trois niveaux}
+\label{fig:validation-flow}
+\end{figure}
+
+\subsection{Niveau L1 --- Syntaxique (bloquant)}
+
+Ce niveau verifie la \textbf{forme} du XML. Tout echec entraine un
+score de \textbf{0.0} (BT rejete).
+
+\begin{itemize}
+    \item \textbf{Parse XML}~: le texte doit etre un XML bien forme
+    (\texttt{xml.etree.ElementTree.fromstring}).
+    \item \textbf{Tag racine}~: doit etre \texttt{<root>} avec l'attribut
+    \texttt{BTCPP\_format="4"}.
+    \item \textbf{Liste blanche de tags}~: chaque tag du BT doit appartenir
+    a l'ensemble \texttt{VALID\_TAGS} (32~tags~: 27~skills +
+    \texttt{root}, \texttt{BehaviorTree}, \texttt{Sequence},
+    \texttt{Fallback}, \texttt{Parallel}).
+    \item \textbf{\skill{MoveAndStop} obligatoire}~: tout BT doit contenir
+    ce skill (le robot doit toujours s'arreter a la fin de sa mission).
+\end{itemize}
+
+\subsection{Niveau L2 --- Structurel (bloquant)}
+
+Ce niveau verifie la \textbf{structure} de l'arbre. Tout echec entraine
+un score de \textbf{0.0}.
+
+\begin{itemize}
+    \item \texttt{<BehaviorTree>} doit etre present sous \texttt{<root>}.
+    \item Les noeuds de controle (\texttt{Sequence}, \texttt{Fallback},
+    \texttt{Parallel}) ne doivent \textbf{pas etre vides}.
+    \item Profondeur maximale~: \textbf{12} niveaux d'imbrication
+    (\texttt{MAX\_DEPTH = 12}).
+    \item Nombre maximal de skills~: \textbf{35} noeuds
+    (\texttt{MAX\_SKILLS = 35}).
+    \item Un \texttt{<Fallback>} doit avoir au moins \textbf{2 branches}
+    (sinon il n'a aucun sens --- un Fallback a 1~branche est juste une
+    indirection inutile).
+\end{itemize}
+
+\subsection{Niveau L3 --- Semantique (avertissements)}
+
+Ce niveau verifie la \textbf{logique metier} du BT. Les erreurs a ce
+niveau ne rejettent pas le BT mais reduisent le score de $-0.1$ par
+avertissement (plancher a 0.5).
+
+\begin{itemize}
+    \item \textbf{Prerequis}~: certains skills doivent apparaitre
+    \emph{avant} d'autres. Le dictionnaire \texttt{PREREQUISITES} definit
+    4 regles~:
+
+    \begin{table}[h]
+    \centering
+    \begin{tabular}{@{}l l l@{}}
+    \toprule
+    \textbf{Skill} & \textbf{Doit etre precede de} & \textbf{Raison} \\
+    \midrule
+    \texttt{MissionStructureValid} & \texttt{LoadMission} & On ne peut
+    valider une mission avant de la charger \\
+    \texttt{CreatePath} & \texttt{ProjectPointOnNetwork} & On ne peut creer
+    un chemin sans projeter les points \\
+    \texttt{AgregatePath} & \texttt{CreatePath} & On ne peut agreger des
+    chemins avant de les creer \\
+    \texttt{GenerateMissionSequence} & \texttt{LoadMission} & La sequence
+    depend de la mission chargee \\
+    \bottomrule
+    \end{tabular}
+    \end{table}
+
+    \item \textbf{Premier skill}~: doit etre \skill{LoadMission} (ou
+    \skill{SimulationStarted} si la mission est une simulation).
+    \item \textbf{Dernier skill}~: doit etre \skill{MoveAndStop} (tolerance~:
+    \skill{SignalAndWaitForOrder} peut le suivre).
+    \item \textbf{Conditions dans Fallback}~: les skills de type
+    \emph{condition} (\texttt{MissionTerminated},
+    \texttt{MissionFullyTreated}, \texttt{MeasurementsQualityValidated},
+    \texttt{MeasurementsEnforcedValidated}) doivent etre a l'interieur d'un
+    noeud \texttt{<Fallback>}. En effet, ces conditions servent de
+    <<~garde~>> pour quitter une boucle --- elles n'ont de sens que dans un
+    contexte de branchement.
+\end{itemize}
+
+\subsection{Protocole de test}
+
+L'evaluation utilise \textbf{15 missions de test} non presentes dans le
+jeu d'entrainement, reparties en trois niveaux de difficulte~:
+
+\begin{itemize}
+    \item \textbf{5 missions classiques}~: navigation simple, inspection
+    standard.
+    \item \textbf{5 missions complexes / hors distribution}~: simulation
+    avec inspection corrective, navigation multi-segments avec mesures.
+    \item \textbf{5 missions ambigues}~: formulations volontairement
+    imprecises pour tester la robustesse.
+\end{itemize}
+
+\textbf{Meilleur resultat~:} sur le modele v4 scaled (2\,000 exemples),
+les \textbf{15/15 missions} obtiennent un score de \textbf{1.0} avec
+\textbf{0~avertissement}.
+
+\textbf{Baseline zero-shot~:} sans fine-tuning, Mistral-7B produit
+\textbf{0/10 BT valides} (score 0.0) --- le modele ne connait pas le
+format BehaviorTree.CPP v4 et hallucine des tags generiques.
+
+\textbf{References~:} \file{validate\_bt.py},
+\file{finetune\_lora\_xml.py} (lignes 339--422).
+
+% ============================================================================
+\newpage
+\section{Tableau recapitulatif}
+\label{sec:recap}
+% ============================================================================
+
+\begin{table}[h]
+\centering
+\caption{Synthese des cinq decisions d'architecture}
+\label{tab:recap}
+\small
+\begin{tabularx}{\textwidth}{@{}l X X X l@{}}
+\toprule
+\textbf{Axe} & \textbf{Decision} & \textbf{Alternative ecartee} &
+\textbf{Justification cle} & \textbf{Fichier} \\
+\midrule
+Proxy & Dataset synthetique (2\,000 ex.\ a partir d'1 XML reel) &
+Annotation manuelle, donnees reelles & Cout prohibitif, BT
+compositionnels $\rightarrow$ generation par blocs &
+\file{generate\_dataset\_v4.py} \\
+\addlinespace
+RAG & Rejete (injection statique) & RAG vectoriel, injection par regles,
+few-shot & 27 skills = 270~tok = 7\,\% contexte, seuil $>50$ non atteint &
+\file{RAG\_ARCHITECTURE.md} \\
+\addlinespace
+Securite & Defense en profondeur 3~couches & Validation simple (parse
+XML seul) & GBNF = 0 hallucination + validateur 3~niveaux = BT surs &
+\file{nav4rail\_grammar.py} \\
+\addlinespace
+Fine-tuning & QLoRA 4-bit NF4, Mistral-7B, 0.58\,\% params &
+Fine-tuning complet ($\sim$56~Go), GPT-2, Llama-3 &
+P100 16~Go, format \texttt{[INST]} natif &
+\file{finetune\_lora\_xml.py} \\
+\addlinespace
+Evaluation & Validateur L1+L2+L3, score 0.0--1.0 & Parse XML simple &
+Distingue erreurs syntaxiques / structurelles / semantiques &
+\file{validate\_bt.py} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+% ============================================================================
+\section{Catalogue des 27 skills NAV4RAIL}
+\label{sec:skills}
+% ============================================================================
+
+Pour reference, voici les 27~skills organises par famille~:
+
+\begin{table}[h]
+\centering
+\caption{Catalogue des skills NAV4RAIL par famille}
+\small
+\begin{tabular}{@{}l l l@{}}
+\toprule
+\textbf{Famille} & \textbf{Skill} & \textbf{Type} \\
+\midrule
+\multirow{12}{*}{\textsc{Preparation} (12)} & LoadMission & Action \\
+ & MissionStructureValid & Condition \\
+ & UpdateCurrentGeneratedActivity & Action \\
+ & ProjectPointOnNetwork & Action \\
+ & CreatePath & Action \\
+ & AgregatePath & Action \\
+ & MissionFullyTreated & Condition \\
+ & PassAdvancedPath & Action \\
+ & PassMission & Action \\
+ & GenerateMissionSequence & Action \\
+ & GenerateCorrectiveSubSequence & Action \\
+ & InsertCorrectiveSubSequence & Action \\
+\midrule
+\multirow{9}{*}{\textsc{Motion} (9)} & MissionTerminated & Condition \\
+ & CheckCurrentStepType & Condition \\
+ & PassMotionParameters & Action \\
+ & Move & Action \\
+ & UpdateCurrentExecutedStep & Action \\
+ & Deccelerate & Action \\
+ & MoveAndStop & Action \\
+ & SignalAndWaitForOrder & Action \\
+ & IsRobotPoseProjectionActive & Condition \\
+\midrule
+\multirow{5}{*}{\textsc{Inspection} (5)} & ManageMeasurements & Action \\
+ & AnalyseMeasurements & Action \\
+ & MeasurementsQualityValidated & Condition \\
+ & PassDefectsLocalization & Action \\
+ & MeasurementsEnforcedValidated & Condition \\
+\midrule
+\textsc{Simulation} (1) & SimulationStarted & Condition \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================================
+\section*{References des fichiers}
+% ============================================================================
+
+\begin{description}
+    \item[\file{finetune\_lora\_xml.py}] Pipeline d'entrainement QLoRA et
+    d'inference (496~lignes).
+    \item[\file{validate\_bt.py}] Validateur de Behavior Trees a 3~niveaux
+    (300~lignes).
+    \item[\file{nav4rail\_grammar.py}] Grammaire GBNF et contrainte de
+    decodage (198~lignes).
+    \item[\file{generate\_dataset\_v4.py}] Generateur du dataset synthetique
+    v4 (2\,000~exemples).
+    \item[\file{RAG\_ARCHITECTURE.md}] Analyse detaillee du choix
+    fine-tuning vs.\ RAG (266~lignes).
+    \item[\file{SKILLS\_CATALOG.md}] Catalogue de reference des 27~skills
+    NAV4RAIL.
+    \item[\file{RESULTS.md}] Resultats experimentaux detailles de toutes
+    les versions.
+    \item[\file{README.md}] Documentation generale du pipeline.
+    \item[\file{job\_finetune.sh}] / \file{job\_finetune\_v4.sh} Scripts
+    SLURM d'orchestration sur le cluster.
+\end{description}
+
+\end{document}
