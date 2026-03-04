@@ -1,5 +1,5 @@
 % ============================================================================
-% NAV4RAIL — Décisions d'architecture
+% BTGenerator — Décisions d'architecture
 % Document de référence pour les choix techniques du projet
 % ============================================================================
 \documentclass[a4paper,11pt]{article}
@@ -35,8 +35,8 @@
     linkcolor=NavyBlue,
     citecolor=NavyBlue,
     urlcolor=NavyBlue,
-    pdftitle={NAV4RAIL -- Décisions d'architecture},
-    pdfauthor={Équipe NAV4RAIL},
+    pdftitle={BTGenerator -- Décisions d'architecture},
+    pdfauthor={Équipe BTGenerator},
 }
 
 % --- Code source ---
@@ -69,7 +69,7 @@
 \usepackage{fancyhdr}
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[L]{\small\textsc{NAV4RAIL}}
+\fancyhead[L]{\small\textsc{BTGenerator}}
 \fancyhead[R]{\small Décisions d'architecture}
 \fancyfoot[C]{\thepage}
 
@@ -85,14 +85,15 @@
 \begin{titlepage}
 \centering
 \vspace*{3cm}
-{\Huge\bfseries NAV4RAIL\par}
+{\Huge\bfseries BTGenerator\par}
 \vspace{0.5cm}
 {\LARGE Décisions d'architecture\par}
 \vspace{1.5cm}
 {\large\itshape Document de référence pour les choix techniques\\
-du pipeline de fine-tuning de Behavior Trees\par}
+du pipeline de fine-tuning de Behavior Trees\\
+pour la stack NAV4RAIL\par}
 \vspace{2cm}
-{\large Équipe NAV4RAIL --- SNCF\par}
+{\large Équipe BTGenerator --- SNCF\par}
 \vspace{1cm}
 {\large\today\par}
 \vfill
@@ -109,11 +110,13 @@ LoRA, et évaluation des Behavior Trees.}
 \section{Introduction}
 % ============================================================================
 
-Le projet \textbf{NAV4RAIL} vise à permettre à un opérateur de décrire une
+Le projet \textbf{BTGenerator} vise à permettre à un opérateur de décrire une
 mission ferroviaire en langage naturel, puis de générer automatiquement un
 \textbf{Behavior Tree} (arbre de comportement, ou \textbf{BT}) au format XML
-compatible avec la bibliothèque \textbf{BehaviorTree.CPP v4}. Ces BT
-commandent un robot de maintenance sur le réseau ferré de la SNCF.
+compatible avec la bibliothèque \textbf{BehaviorTree.CPP v4}. Ces BT sont
+destinés à la stack \textbf{NAV4RAIL} --- l'équivalent ferroviaire de Nav2
+(ROS~2) développé par la SNCF pour piloter ses robots de maintenance sur le
+réseau ferré.
 
 Le pipeline repose sur le \textbf{fine-tuning} (ajustement fin) d'un modèle
 de langage (\textbf{LLM}, pour \emph{Large Language Model} --- grand modèle
@@ -146,7 +149,10 @@ Ce document consolide les cinq décisions architecturales majeures du projet~:
     arborescente qui décompose une tâche complexe en sous-tâches (nœuds).
     Utilisé en robotique et dans les jeux vidéo.
     \item[BehaviorTree.CPP] Bibliothèque C++ de référence pour exécuter des
-    BT. Le format v4 est le standard XML utilisé dans NAV4RAIL.
+    BT. Le format v4 est le standard XML utilisé par la stack NAV4RAIL.
+    \item[NAV4RAIL] Stack logicielle de navigation ferroviaire développée par
+    la SNCF, analogue à Nav2 (ROS~2) mais adaptée aux robots de maintenance
+    sur rail. BTGenerator produit des BT au format attendu par NAV4RAIL.
     \item[LLM] \textbf{Large Language Model} --- grand modèle de langage.
     Réseau de neurones pré-entraîné sur de vastes corpus de texte, capable de
     générer du texte (ici, du XML).
@@ -298,7 +304,7 @@ v4 scaled & \textbf{2\,000} & \textbf{27 réels} & $\sim$\textbf{50} &
 
 \textbf{Le passage v3~$\rightarrow$~v4} est la transition clé~: les 8~skills
 <<~proxy~>> simplifiés (ex.~: \texttt{GetMission}, \texttt{CalculatePath})
-ont été remplacés par les 27~skills réels du système NAV4RAIL (ex.~:
+ont été remplacés par les 27~skills réels de la stack NAV4RAIL (ex.~:
 \skill{LoadMission}, \skill{MissionStructureValid},
 \skill{ProjectPointOnNetwork}, etc.).
 
