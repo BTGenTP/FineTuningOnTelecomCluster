@@ -49,14 +49,14 @@ def build_mistral_inst_prompt(*, mission: str, catalog: Mapping[str, Any]) -> Tu
     instruction = f"{sys}\n{cat}\n\nMission: {mission}\n\nRéponds UNIQUEMENT avec la liste JSON."
     # Mistral instruct format
     prompt = f"<s>[INST] {instruction} [/INST]\n### Steps JSON:\n"
-    return prompt, "### Steps JSON:"
+    return prompt, "\n### Steps JSON:"
 
 
 def build_phi2_prompt(*, mission: str, catalog: Mapping[str, Any]) -> Tuple[str, str]:
     sys = system_prompt_base()
     cat = render_catalog_compact(catalog)
     prompt = f"{sys}\n{cat}\n\nMission: {mission}\n\n### Steps JSON:\n"
-    return prompt, "### Steps JSON:"
+    return prompt, "\n### Steps JSON:"
 
 
 def build_chat_messages(*, mission: str, catalog: Mapping[str, Any]) -> List[Dict[str, str]]:

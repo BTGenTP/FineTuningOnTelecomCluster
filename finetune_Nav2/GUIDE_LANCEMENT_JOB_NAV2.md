@@ -18,7 +18,7 @@ Ce guide décrit une procédure reproductible (style TelecomCluster) pour :
 Les scripts et imports Python supposent que tu copies **le dossier** `finetune_Nav2/` (pas son contenu) :
 
 ```bash
-mkdir -p ~/code/nav4rail_finetune_nav2
+ssh gpu "mkdir -p ~/code/nav4rail_finetune_nav2"
 scp -r <local>/repositories/FineTuningOnTelecomCluster/finetune_Nav2 gpu:~/code/nav4rail_finetune_nav2/
 ```
 

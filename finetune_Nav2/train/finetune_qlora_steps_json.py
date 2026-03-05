@@ -86,6 +86,8 @@ def load_model_and_tokenizer(spec: ModelSpec):
     tokenizer = AutoTokenizer.from_pretrained(spec.hf_id, use_fast=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    # TRL recommendation for half-precision training.
+    tokenizer.padding_side = "right"
 
     model = AutoModelForCausalLM.from_pretrained(
         spec.hf_id,
