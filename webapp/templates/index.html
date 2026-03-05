@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NAV4RAIL — BT Generator</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <h1>NAV4RAIL — Behavior Tree Generator</h1>
+        <p class="subtitle">Mission en langage naturel &rarr; BehaviorTree XML (BT.CPP v4)</p>
+        <div id="model-status" class="status-badge loading">Chargement du modele...</div>
+    </header>
+
+    <main>
+        <section class="input-panel">
+            <h2>Mission</h2>
+            <textarea id="mission" rows="4"
+                placeholder="Ex: Navigue jusqu'au km 42 depuis le km 10"></textarea>
+
+            <div class="controls">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="use-grammar" checked>
+                    Decodage contraint (GBNF)
+                </label>
+                <button id="btn-generate" onclick="generate()" disabled>Generer</button>
+            </div>
+
+            <div class="examples">
+                <h3>Exemples de missions</h3>
+                <div id="example-list"></div>
+            </div>
+
+            <div class="validate-section">
+                <h3>Valider un XML existant</h3>
+                <textarea id="xml-input" rows="6"
+                    placeholder="Collez votre XML BehaviorTree ici..."></textarea>
+                <button onclick="validateOnly()">Valider</button>
+            </div>
+        </section>
+
+        <section class="output-panel">
+            <div id="loading" class="hidden">
+                <div class="progress-container">
+                    <div class="progress-bar" id="progress-bar"></div>
+                </div>
+                <div class="progress-info">
+                    <span id="progress-text">Demarrage...</span>
+                    <span id="progress-timer">0:00 / 4:00</span>
+                </div>
+                <div class="progress-steps">
+                    <div class="step active" id="step-prompt">Preparation du prompt</div>
+                    <div class="step" id="step-inference">Inference du modele</div>
+                    <div class="step" id="step-validate">Validation XML</div>
+                </div>
+            </div>
+
+            <div id="result" class="hidden">
+                <h2>Behavior Tree XML</h2>
+                <div class="gen-time" id="gen-time"></div>
+                <pre><code id="xml-output"></code></pre>
+
+                <div class="validation-panel" id="validation-panel">
+                    <h3>Validation</h3>
+
+                    <div class="score-section">
+                        <div class="score-bar-container">
+                            <div class="score-bar" id="score-bar"></div>
+                        </div>
+                        <span class="score-value" id="score-value"></span>
+                        <span class="status-badge" id="valid-badge"></span>
+                    </div>
+
+                    <div class="levels">
+                        <div class="level-badge" id="level-l1">
+                            <span class="level-icon"></span>
+                            <span>L1 Syntaxique</span>
+                        </div>
+                        <div class="level-badge" id="level-l2">
+                            <span class="level-icon"></span>
+                            <span>L2 Structurel</span>
+                        </div>
+                        <div class="level-badge" id="level-l3">
+                            <span class="level-icon"></span>
+                            <span>L3 Semantique</span>
+                        </div>
+                    </div>
+
+                    <div id="warnings-list" class="hidden"></div>
+                    <div id="errors-list" class="hidden"></div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

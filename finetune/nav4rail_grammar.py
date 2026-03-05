@@ -69,42 +69,16 @@ fallback  ::= sp "<Fallback name=\"" name "\">\n" child child child* sp "</Fallb
 child     ::= skill | node
 
 # Nœuds feuilles (skills — auto-fermants)
-skill     ::= sp "<" skill-tag " name=\"" name "\"/>\n"
+skill     ::= sp "<" skilltag " name=\"" name "\"/>\n"
 
 # 27 skills réels NAV4RAIL (4 familles)
-skill-tag ::= "LoadMission"
-            | "MissionStructureValid"
-            | "UpdateCurrentGeneratedActivity"
-            | "ProjectPointOnNetwork"
-            | "CreatePath"
-            | "AgregatePath"
-            | "MissionFullyTreated"
-            | "PassAdvancedPath"
-            | "PassMission"
-            | "GenerateMissionSequence"
-            | "GenerateCorrectiveSubSequence"
-            | "InsertCorrectiveSubSequence"
-            | "MissionTerminated"
-            | "CheckCurrentStepType"
-            | "PassMotionParameters"
-            | "Move"
-            | "UpdateCurrentExecutedStep"
-            | "Deccelerate"
-            | "MoveAndStop"
-            | "SignalAndWaitForOrder"
-            | "IsRobotPoseProjectionActive"
-            | "ManageMeasurements"
-            | "AnalyseMeasurements"
-            | "MeasurementsQualityValidated"
-            | "PassDefectsLocalization"
-            | "MeasurementsEnforcedValidated"
-            | "SimulationStarted"
+skilltag ::= "LoadMission" | "MissionStructureValid" | "UpdateCurrentGeneratedActivity" | "ProjectPointOnNetwork" | "CreatePath" | "AgregatePath" | "MissionFullyTreated" | "PassAdvancedPath" | "PassMission" | "GenerateMissionSequence" | "GenerateCorrectiveSubSequence" | "InsertCorrectiveSubSequence" | "MissionTerminated" | "CheckCurrentStepType" | "PassMotionParameters" | "Move" | "UpdateCurrentExecutedStep" | "Deccelerate" | "MoveAndStop" | "SignalAndWaitForOrder" | "IsRobotPoseProjectionActive" | "ManageMeasurements" | "AnalyseMeasurements" | "MeasurementsQualityValidated" | "PassDefectsLocalization" | "MeasurementsEnforcedValidated" | "SimulationStarted"
 
 # Nom en snake_case
 name      ::= [a-z] ([a-z0-9_])*
 
 # Indentation flexible (2 à 10 espaces)
-sp        ::= "  " | "    " | "      " | "        " | "          "
+sp ::= "  " | "    " | "      " | "        " | "          "
 '''
 
 

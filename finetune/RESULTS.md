@@ -47,6 +47,11 @@ Méthode commune : QLoRA 4-bit NF4 + `DataCollatorForCompletionOnlyLM`.
   - [Evaluation v4 scaled](#évaluation-v4-scaled)
   - [Analyse qualitative v4 scaled](#analyse-qualitative-v4-scaled)
   - [Analyse de convergence](#analyse-de-convergence)
+- [Mistral-7B — Dataset v4 scaled (2000 ex., 40 epochs, RTX 3090)](#mistral-7b--dataset-v4-scaled-2000-ex-40-epochs-rtx-3090)
+  - [Configuration v4 40ep](#configuration-v4-40ep)
+  - [Courbe de loss v4 40ep](#courbe-de-loss-v4-40ep)
+  - [Evaluation v4 40ep](#évaluation-v4-40ep)
+  - [Analyse d'overfitting longue durée](#analyse-doverfitting-longue-durée)
 - [Comparaison qualitative](#comparaison-qualitative)
   - [Mission 1 — Navigation sécurisée](#mission-1--navigation-sécurisée)
   - [Mission 2 — Navigation post-inspection](#mission-2--navigation-post-inspection)
@@ -971,6 +976,89 @@ le pattern `xml_complex_nav_measure_return` — le modèle a appris à combiner 
 
 ---
 
+## Mistral-7B — Dataset v4 scaled (2000 ex., 40 epochs, RTX 3090)
+
+**Job 741756** — Entraîné du 03/03/2026 16:28 au 04/03/2026 22:52 (30.4h).
+Objectif : vérifier si des epochs supplémentaires améliorent la convergence observée à 15 epochs.
+
+### Configuration v4 40ep
+
+| Paramètre | 15 epochs (741212) | **40 epochs (741756)** |
+|---|---|---|
+| Dataset | 2000 ex. (1800/200) | 2000 ex. (1800/200) |
+| Epochs | 15 | **40** |
+| Batch effectif | 64 (4×16) | 64 (4×16) |
+| Steps totaux | 420 | **1120** |
+| Output dir | `outputs/nav4rail_mistral_lora/` | **`outputs/nav4rail_mistral_lora_40ep/`** |
+| Temps total | 683.6 min (11.4h) | **1823.2 min (30.4h)** |
+| Temps/step | ~95s | ~95s |
+| GPU | RTX 3090 (24 GB) | RTX 3090 (24 GB) |
+| VRAM | 5.0 GB | 5.0 GB |
+
+### Courbe de loss v4 40ep
+
+```mermaid
+xychart-beta
+    title "Eval Loss — 40 epochs (best @ epoch 8, overfitting sévère)"
+    x-axis "Epoch" [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40]
+    y-axis "Eval Loss" 0 --> 0.030
+    line [0.0274,0.0093,0.0061,0.0083,0.0052,0.0051,0.0049,0.0049,0.0051,0.0049,0.0056,0.0104,0.0054,0.0130,0.0057,0.0055,0.0055,0.0059,0.0057,0.0060,0.0063,0.0066,0.0063,0.0070,0.0070,0.0081,0.0088,0.0094,0.0085,0.0114,0.0117,0.0141,0.0145,0.0148,0.0154,0.0159,0.0162,0.0164,0.0165,0.0165]
+```
+
+| Epoch | Eval Loss | Train Loss | Grad Norm | Phase |
+|-------|-----------|------------|-----------|-------|
+| 1 | 0.0274 | 0.330 | 1.67 | Warmup |
+| 2 | 0.0093 | 0.0104 | 0.17 | Convergence rapide |
+| 3 | 0.0061 | 0.0073 | 0.10 | Convergence |
+| 5 | 0.0052 | 0.0050 | 0.05 | Convergence |
+| 7 | 0.0049 | 0.0045 | 0.03 | Plateau |
+| **8** | **0.0049** | 0.0043 | 0.02 | **Best eval_loss** |
+| 9 | 0.0051 | 0.0042 | 0.02 | Début overfitting |
+| 12 | 0.0104 | 0.0064 | 0.08 | Spike (instabilité) |
+| 15 | 0.0057 | 0.0044 | 0.04 | Overfitting modéré |
+| 20 | 0.0060 | 0.0034 | 0.04 | Overfitting |
+| 25 | 0.0070 | 0.0023 | 0.04 | Overfitting croissant |
+| 30 | 0.0114 | 0.0008 | 0.04 | Overfitting sévère |
+| 35 | 0.0154 | 0.0003 | 0.01 | Overfitting profond |
+| 40 | 0.0165 | 0.0003 | 0.01 | Saturé |
+
+### Évaluation v4 40ep
+
+Grâce à `load_best_model_at_end=True`, le modèle évalué est celui de l'epoch 8 (best eval_loss = 0.0049).
+
+```
+Résultat        : 10/10 BTs valides (100%)
+Score moyen     : 1.00 / 1.0
+Avec warnings   : 0 / 10 valides
+```
+
+### Analyse d'overfitting longue durée
+
+**3 phases distinctes :**
+
+1. **Convergence (epochs 1-8)** : eval_loss descend de 0.0274 à 0.0049, train_loss de 0.330 à 0.0043. Le modèle apprend efficacement les patterns XML.
+
+2. **Instabilité (epochs 9-15)** : eval_loss oscille entre 0.0051 et 0.0130 avec deux spikes (ep 12: 0.0104, ep 14: 0.0130). Le modèle commence à mémoriser le train set.
+
+3. **Overfitting monotone (epochs 16-40)** : eval_loss monte de 0.0055 à 0.0165 (×3.4 vs best) pendant que la train_loss descend à 0.0003. Le gap train/eval s'élargit continuellement.
+
+**Comparaison 15ep vs 40ep :**
+
+| Métrique | 15 epochs | 40 epochs |
+|---|---|---|
+| Best eval_loss | 0.0048 (ep 7) | 0.0049 (ep 8) |
+| Final eval_loss | 0.0057 | 0.0165 |
+| Ratio overfitting final | ×1.2 | **×3.4** |
+| Train loss finale | 0.0043 | 0.0003 |
+| Score évaluation | 10/10, 1.00 | 10/10, 1.00 |
+| Temps GPU | 11.4h | 30.4h |
+
+**Conclusion :** les 25 epochs supplémentaires n'améliorent **aucune métrique**. Le best eval_loss est quasi identique (0.0049 vs 0.0048). Le score reste parfait grâce au early checkpoint loading. **7-8 epochs est le sweet spot confirmé** pour 2000 exemples avec cette architecture.
+
+Un early stopping avec patience=3 aurait arrêté le training vers epoch 11 et économisé ~22h de GPU.
+
+---
+
 ## Comparaison qualitative
 
 ### Mission 1 — Navigation sécurisée
@@ -1112,23 +1200,21 @@ xychart-beta
 | GPU                                      | P100              | P100                 | P100                 | P100                 | P100                                      | **RTX 3090**                    |
 | VRAM                                     | **1.0 GB**        | 4.5 GB               | 4.5 GB               | 4.5 GB               | 5.0 GB                                    | 5.0 GB                          |
 
-**Évolution v4 550 ex. → v4 scaled (2000 ex.) :**
+**Évolution v4 550 ex. → v4 scaled (2000 ex.) → 40 epochs :**
 
-1. **Le score reste parfait** (10/10 → 15/15, score 1.00) malgré des missions nettement plus
-   complexes et ambiguës — le modèle généralise bien aux patterns combinés hors distribution.
+1. **Le score reste parfait** (10/10 → 15/15 → 10/10, score 1.00) sur toutes les configurations.
+   Le modèle généralise bien aux patterns combinés hors distribution.
 
-2. **Le scaling des données fonctionne** : 2000 exemples avec ~50 templates (vs ~28) permettent
-   au modèle d'apprendre les patterns avancés du BT réel (path calculation loop, move-and-inspect,
-   reach-and-stop, enforced analysis, multi-motion selector).
+2. **Le scaling des données fonctionne** : 2000 exemples avec ~50 templates permettent
+   d'apprendre les patterns avancés du BT réel (path loop, move-and-inspect, enforced analysis).
 
-3. **L'overfitting apparaît à epoch 9** avec 2000 exemples (best eval_loss à epoch 7 = 0.0048).
-   Le sweet spot se situe à 7-8 epochs pour ce volume de données.
+3. **7-8 epochs est le sweet spot confirmé** : le run 40 epochs obtient un best eval_loss
+   quasi identique (0.0049 vs 0.0048) à epoch 8. Les 32 epochs supplémentaires n'apportent
+   aucune amélioration et causent un overfitting sévère (×3.4 à epoch 40).
 
-4. **La RTX 3090 est ~5.7× plus rapide** que le P100 par step (95s vs 545s). Le run de 15 epochs
-   (420 steps) s'est terminé en 11.4h sur 3090 (vs ~63h estimées sur P100).
+4. **La RTX 3090 est ~5.7× plus rapide** que le P100 (95s vs 545s/step).
 
-5. **La eval_loss n'est pas directement comparable** entre 550 ex. (0.0035) et 2000 ex. (0.0048)
-   car le eval set est 3.6× plus grand (200 vs 55 exemples) et contient des patterns plus variés.
+5. **Early stopping avec patience=3** aurait économisé ~22h de GPU sur le run 40 epochs.
 
 ---
 
@@ -1151,7 +1237,7 @@ xychart-beta
 | **Augmenter dataset v4 à 2000 ex. (~50 templates)**             | ✅ Réalisé   | **Score 1.00, 0/15 warnings, best loss 0.0048 @ epoch 7 — job 741212** |
 | **Évaluation sur missions hors distribution**                   | ✅ Réalisé   | **15 missions (5 complexes + 5 ambiguës) — toutes score 1.0**     |
 | **Migration P100 → RTX 3090**                                   | ✅ Réalisé   | **5.7× plus rapide (95s/step vs 545s), 11.4h pour 15 epochs**    |
-| Run 40 epochs — dataset v4 scaled (2000 ex.)                    | 🔄 En cours  | Job 741223 sur 3090 — vérifier overfitting longue durée           |
+| **Run 40 epochs — dataset v4 scaled (2000 ex.)**                | ✅ Réalisé   | **Best 0.0049 (ep 8) = identique à 15ep. Overfitting ×3.4 à ep 40 — job 741756** |
 | Passer au format réel complet (Stratégie B)                     | À faire      | `<Action ID="Move"/>` + paramètres blackboard + SubTreePlus       |
 | Tester sur modèle plus petit (Mistral-3B, Phi-3-mini)           | À faire      | Identifier le modèle minimal pour déploiement embarqué            |
 | Early stopping automatique                                      | À faire      | Overfitting détecté @ epoch 9 — stopper auto au best eval_loss    |
