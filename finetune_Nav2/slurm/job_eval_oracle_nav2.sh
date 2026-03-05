@@ -29,6 +29,15 @@ if [ ! -d "$VENV_DIR" ]; then
   python3 -m venv "$VENV_DIR"
 fi
 source "$VENV_DIR/bin/activate"
+
+# Stable caches (avoid re-downloading big wheels / HF shards between jobs)
+export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HF_HOME/datasets}"
+export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$HOME/.cache/pip}"
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+mkdir -p "$HF_HUB_CACHE" "$HF_DATASETS_CACHE" "$PIP_CACHE_DIR"
+
 python3 -m pip install --upgrade pip
 python3 -m pip install -r finetune_Nav2/requirements.txt
 

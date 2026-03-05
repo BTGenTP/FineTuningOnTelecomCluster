@@ -43,6 +43,20 @@ cd ~/code/nav4rail_finetune_nav2
 sbatch finetune_Nav2/slurm/job_finetune_nav2_mistral7b.sh
 ```
 
+### Cache HF / pip (éviter les gros téléchargements)
+
+Les jobs configurent automatiquement :
+- `HF_HOME` / `HF_HUB_CACHE` / `HF_DATASETS_CACHE` (cache modèles/datasets)
+- `PIP_CACHE_DIR` (cache wheels pip, évite de re-télécharger torch/nvidia entre jobs)
+
+Si besoin, tu peux les overrider avant `sbatch` :
+
+```bash
+export HF_HOME="$HOME/.cache/huggingface"
+export PIP_CACHE_DIR="$HOME/.cache/pip"
+sbatch finetune_Nav2/slurm/job_finetune_nav2_mistral7b.sh
+```
+
 ### 4) Surveiller et récupérer les résultats
 
 ```bash

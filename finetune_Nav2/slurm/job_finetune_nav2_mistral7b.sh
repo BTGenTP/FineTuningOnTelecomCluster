@@ -31,11 +31,17 @@ if [ ! -d "$VENV_DIR" ]; then
   python3 -m venv "$VENV_DIR"
 fi
 source "$VENV_DIR/bin/activate"
+
+# Stable caches (avoid re-downloading big wheels / HF shards between jobs)
+export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HF_HOME/datasets}"
+export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$HOME/.cache/pip}"
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+mkdir -p "$HF_HUB_CACHE" "$HF_DATASETS_CACHE" "$PIP_CACHE_DIR"
+
 python3 -m pip install --upgrade pip
 python3 -m pip install -r finetune_Nav2/requirements.txt
-
-export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
-export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-$HF_HOME/hub}"
 
 DATASET_PATH="${DATASET_PATH:-$WORK_DIR/finetune_Nav2/dataset_out/dataset_nav2_steps.jsonl}"
 OUT_DIR="${OUT_DIR:-$WORK_DIR/finetune_Nav2/outputs/nav2_steps_mistral7b_lora_${SLURM_JOB_ID:-local}}"

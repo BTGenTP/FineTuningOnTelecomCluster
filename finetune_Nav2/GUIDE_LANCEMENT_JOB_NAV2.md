@@ -48,7 +48,13 @@ Notes :
 Variables utiles :
 
 - `HF_HOME` (défaut: `~/.cache/huggingface`)
-- `TRANSFORMERS_CACHE` (défaut: `$HF_HOME/hub`)
+- `HF_HUB_CACHE` (défaut: `$HF_HOME/hub`)
+- `HF_DATASETS_CACHE` (défaut: `$HF_HOME/datasets`)
+- `PIP_CACHE_DIR` (défaut: `~/.cache/pip`) — **important** pour éviter de retélécharger torch/nvidia à chaque job
+
+Note :
+- Le tout premier run sur un nouveau venv peut être long (téléchargements torch + deps).  
+  Avec `PIP_CACHE_DIR` et un venv persistant, les runs suivants réutilisent les wheels.
 
 ## 3) Générer le dataset (SBATCH)
 

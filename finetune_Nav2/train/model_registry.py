@@ -35,7 +35,8 @@ MODELS: dict[str, ModelSpec] = {
         epochs=10,
         lr=2e-4,
         chat_template=False,
-        response_anchor="\n### Steps JSON:",
+        # For Mistral, anchor on the chat delimiter: most stable tokenization.
+        response_anchor="[/INST]",
     ),
     "llama3_8b": ModelSpec(
         key="llama3_8b",

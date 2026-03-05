@@ -56,9 +56,8 @@ Cause probable :
 ### Correctif appliqué
 
 Changements faits dans `finetune_Nav2/` :
-- Ancre collator alignée sur le texte exact : **`\\n### Steps JSON:`** (et non `### Steps JSON:`)
-  - `train/model_registry.py`: `response_anchor="\\n### Steps JSON:"`
-  - `train/prompting.py`: fonctions retournent la même ancre
+- Pour Mistral-7B, ancre collator revenue sur **`[/INST]`** (tokenisation la plus stable sur Mistral).
+  - Objectif: éviter les faux négatifs “Could not find response key …” observés sur le cluster.
 - `tokenizer.padding_side = "right"` (recommandation TRL pour limiter des effets de padding en fp16).
 
 Action attendue :

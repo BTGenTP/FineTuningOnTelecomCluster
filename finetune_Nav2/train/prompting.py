@@ -49,7 +49,8 @@ def build_mistral_inst_prompt(*, mission: str, catalog: Mapping[str, Any]) -> Tu
     instruction = f"{sys}\n{cat}\n\nMission: {mission}\n\nRéponds UNIQUEMENT avec la liste JSON."
     # Mistral instruct format
     prompt = f"<s>[INST] {instruction} [/INST]\n### Steps JSON:\n"
-    return prompt, "\n### Steps JSON:"
+    # Use [/INST] as completion-only anchor (most stable for Mistral tokenizers).
+    return prompt, "[/INST]"
 
 
 def build_phi2_prompt(*, mission: str, catalog: Mapping[str, Any]) -> Tuple[str, str]:
