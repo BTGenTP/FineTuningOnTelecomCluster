@@ -11,7 +11,9 @@ set -euo pipefail
 
 module load python/3.11.13 cuda/12.4.1 || true
 
-WORK_DIR="$HOME/code/nav4rails/repositories/FineTuningOnTelecomCluster"
+# This job assumes you copied `finetune_Nav2/` to this directory on the cluster:
+#   ~/code/nav4rail_finetune_nav2/finetune_Nav2/...
+WORK_DIR="$HOME/code/nav4rail_finetune_nav2"
 VENV_DIR="$HOME/venvs/nav4rail_nav2_steps"
 
 echo "[job] host=$(hostname) jobid=${SLURM_JOB_ID:-unknown} date=$(date -Iseconds)"

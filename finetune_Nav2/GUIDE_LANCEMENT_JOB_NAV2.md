@@ -6,15 +6,12 @@ Ce guide décrit une procédure reproductible (style TelecomCluster) pour :
 - fine-tuner un modèle en QLoRA pour produire des steps JSON stricts,
 - (MVP) exécuter une évaluation **statique**: steps → XML → validation → écriture `runs/<id>/`.
 
-> Contrainte projet : ne pas modifier `repositories/FineTuningOnTelecomCluster/finetune` (ce guide vise `finetune_Nav2/`).
-
 ## 0) Répertoires et source de vérité
 
-- **Répertoire de travail**: `repositories/FineTuningOnTelecomCluster/`
-- **Pipeline Nav2**: `repositories/FineTuningOnTelecomCluster/finetune_Nav2/`
-- **Runs**: `runs/<YYYY-MM-DD>_exp###/` (immuable; ne jamais écraser)
-- **Catalogue unique**: `repositories/BT_Navigator/script/bt_nodes_catalog.json`
-  - Override possible via `NAV4RAIL_CATALOG_PATH`.
+- **Pipeline Nav2 (self-contained)**: `repositories/FineTuningOnTelecomCluster/finetune_Nav2/`
+- **Catalogue unique (source de vérité)**: `finetune_Nav2/catalog/bt_nodes_catalog.json`
+- **BTs de référence vendored**: `finetune_Nav2/reference_behavior_trees/`
+- **Runs**: `finetune_Nav2/runs/<YYYY-MM-DD>_exp###/` (immuable; ne jamais écraser)
 
 ## 1) Hypothèses cluster (à adapter)
 
@@ -52,7 +49,7 @@ Variables :
 Commande :
 
 ```bash
-cd ~/code/nav4rails/repositories/FineTuningOnTelecomCluster
+cd ~/code/nav4rail_finetune_nav2
 sbatch finetune_Nav2/slurm/job_generate_dataset_nav2.sh
 ```
 
@@ -65,7 +62,7 @@ Script : `finetune_Nav2/slurm/job_eval_oracle_nav2.sh`
 Commande :
 
 ```bash
-cd ~/code/nav4rails/repositories/FineTuningOnTelecomCluster
+cd ~/code/nav4rail_finetune_nav2
 sbatch finetune_Nav2/slurm/job_eval_oracle_nav2.sh
 ```
 
@@ -87,7 +84,7 @@ Le validateur supporte des **variables blackboard externes** via `external_bb_va
 Mistral-7B :
 
 ```bash
-cd ~/code/nav4rails/repositories/FineTuningOnTelecomCluster
+cd ~/code/nav4rail_finetune_nav2
 sbatch finetune_Nav2/slurm/job_finetune_nav2_mistral7b.sh
 ```
 
@@ -101,14 +98,14 @@ Artefact principal :
 Llama 3.x 8B :
 
 ```bash
-cd ~/code/nav4rails/repositories/FineTuningOnTelecomCluster
+cd ~/code/nav4rail_finetune_nav2
 sbatch finetune_Nav2/slurm/job_finetune_nav2_llama3_8b.sh
 ```
 
 Phi-2 :
 
 ```bash
-cd ~/code/nav4rails/repositories/FineTuningOnTelecomCluster
+cd ~/code/nav4rail_finetune_nav2
 sbatch finetune_Nav2/slurm/job_finetune_nav2_phi2.sh
 ```
 
@@ -117,7 +114,7 @@ sbatch finetune_Nav2/slurm/job_finetune_nav2_phi2.sh
 Une fois un adapter entraîné, lancer l’évaluation statique (sans simulation) :
 
 ```bash
-cd repositories/FineTuningOnTelecomCluster
+cd ~/code/nav4rail_finetune_nav2
 python3 -m finetune_Nav2.eval.run_hf_eval \
   --model-key mistral7b \
   --adapter-dir finetune_Nav2/outputs/nav2_steps_mistral7b_lora_<jobid>/lora_adapter \
@@ -142,7 +139,7 @@ Le schéma JSON est dérivé du catalogue (skills allowlist + union des ports). 
 GBNF steps JSON (pour llama.cpp / backends compatibles) :
 
 ```bash
-cd repositories/FineTuningOnTelecomCluster
+cd ~/code/nav4rail_finetune_nav2
 python3 -m finetune_Nav2.constraints.cli --out-gbnf finetune_Nav2/constraints/nav2_steps.gbnf
 ```
 

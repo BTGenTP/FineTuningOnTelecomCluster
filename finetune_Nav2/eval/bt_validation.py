@@ -1,18 +1,10 @@
 from __future__ import annotations
-
-import json
-import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 from xml.etree import ElementTree as ET
 
 
-def nav4rails_root() -> Path:
-    return Path(__file__).resolve().parents[4]
-
-
-def bt_navigator_script_dir() -> Path:
-    return nav4rails_root() / "repositories" / "BT_Navigator" / "script"
+from finetune_Nav2.validator import validate_bt_xml as v
 
 
 def validate_bt_xml(
@@ -25,32 +17,20 @@ def validate_bt_xml(
     external_bb_vars: Optional[list[str]] = None,
 ) -> Dict[str, Any]:
     """
-    Calls BT_Navigator/script/validate_bt_xml.py programmatically.
-    Returns its JSON report dict.
+    Validate XML via the vendored validator under finetune_Nav2/validator/.
     """
-    script_dir = bt_navigator_script_dir()
-    sys.path.insert(0, str(script_dir))
-    try:
-        import validate_bt_xml as v  # type: ignore
-    finally:
-        # Best-effort cleanup (keep minimal side effects).
-        try:
-            sys.path.remove(str(script_dir))
-        except Exception:
-            pass
-
-    cat = catalog_path or (script_dir / "bt_nodes_catalog.json")
-    ref = reference_dir or (script_dir.parent / "behavior_trees")
-
     ext = external_bb_vars
     if ext is None:
         # Proxy Nav2: goal pose is injected by the /navigate_to_pose action server.
         ext = ["goal"]
 
-    report = v._validate_tree(  # type: ignore[attr-defined]
+    cat = catalog_path or v.DEFAULT_CATALOG_PATH
+    ref = reference_dir or v.DEFAULT_REFERENCE_DIR
+
+    report = v._validate_tree(
         xml_path=xml_path.resolve(),
-        reference_dir=ref.resolve() if ref and ref.exists() else None,
-        catalog_path=cat.resolve(),
+        reference_dir=ref.resolve() if ref and Path(ref).exists() else None,
+        catalog_path=Path(cat).resolve(),
         strict_attrs=bool(strict_attrs),
         strict_blackboard=bool(strict_blackboard),
         external_bb_vars=list(ext or []),

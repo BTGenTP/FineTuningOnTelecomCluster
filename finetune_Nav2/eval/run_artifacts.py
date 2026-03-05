@@ -7,12 +7,14 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
-def nav4rails_root() -> Path:
-    return Path(__file__).resolve().parents[4]
+def finetune_nav2_root() -> Path:
+    # finetune_Nav2/eval/run_artifacts.py -> finetune_Nav2/
+    return Path(__file__).resolve().parents[1]
 
 
 def runs_root() -> Path:
-    return nav4rails_root() / "runs"
+    # Keep runs self-contained under finetune_Nav2/ by default.
+    return finetune_nav2_root() / "runs"
 
 
 def _today_ymd() -> str:

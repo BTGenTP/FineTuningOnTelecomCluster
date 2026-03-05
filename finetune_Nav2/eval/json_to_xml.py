@@ -10,15 +10,12 @@ import xml.etree.ElementTree as ET
 from finetune_Nav2.catalog.catalog_io import allowed_skills
 
 
-def nav4rails_root() -> Path:
-    return Path(__file__).resolve().parents[4]
+def finetune_nav2_root() -> Path:
+    # finetune_Nav2/eval/json_to_xml.py -> finetune_Nav2/
+    return Path(__file__).resolve().parents[1]
 
 
-def bt_navigator_root() -> Path:
-    return nav4rails_root() / "repositories" / "BT_Navigator"
-
-
-NAV_SUBTREE_SOURCE_XML = bt_navigator_root() / "behavior_trees" / "navigate_then_spin.xml"
+NAV_SUBTREE_SOURCE_XML = finetune_nav2_root() / "reference_behavior_trees" / "navigate_then_spin.xml"
 
 
 @dataclass(frozen=True)
@@ -45,7 +42,7 @@ def _indent_xml(elem: Element, level: int = 0) -> None:
 def _add_nav_subtree_definition(root: Element) -> None:
     """
     Append <BehaviorTree ID="NavigateToPoseWithReplanningAndRecovery">...</BehaviorTree>
-    copied from BT_Navigator reference XML.
+    copied from the vendored reference XML under finetune_Nav2/reference_behavior_trees/.
     """
     if not NAV_SUBTREE_SOURCE_XML.exists():
         raise RuntimeError(f"Missing subtree reference XML: {NAV_SUBTREE_SOURCE_XML}")

@@ -6,15 +6,71 @@ Ce dossier contient un pipeline reproductible (orienté **SLURM**) pour :
 - fine-tuner (QLoRA) des LLMs pour produire une sortie **contrôlée**,
 - contraindre la génération (GBNF / contraintes token),
 - convertir et valider statiquement un BT Nav2/BehaviorTree.CPP,
-- écrire les artefacts dans `runs/<YYYY-MM-DD>_exp###/`.
+- écrire les artefacts dans `finetune_Nav2/runs/<YYYY-MM-DD>_exp###/`.
 
-## Contrats (NAV4RAIL)
+## Lancement rapide (local → cluster)
 
-- Le pipeline “officiel” doit suivre : **LLM → steps JSON stricts → conversion déterministe JSON→XML → validation statique**.
-- La source de vérité des skills/ports/types est un **catalogue unique** (`bt_nodes_catalog.json`).
-- Toute génération doit être validée statiquement avant simulation.
+Cette section reprend l’esprit du “lancement rapide” de `finetune/README.md`, mais adaptée à `finetune_Nav2/` et à un dataset généré **en local**.
 
-Un mode **expérimental** “XML direct” peut exister dans un sous-dossier isolé, mais ne doit pas remplacer le pipeline officiel.
+### 1) Générer le dataset en local
+
+Depuis `repositories/FineTuningOnTelecomCluster/` :
+
+```bash
+cd repositories/FineTuningOnTelecomCluster
+python3 -m finetune_Nav2.dataset.generate_dataset_nav2_steps \
+  --out finetune_Nav2/dataset_out/dataset_nav2_steps.jsonl \
+  --n 2000 \
+  --seed 42
+```
+
+### 2) Copier sur le cluster (comme TelecomCluster)
+
+On copie uniquement `finetune_Nav2/` (self-contained) dans un dossier dédié du cluster :
+
+```bash
+scp -r repositories/FineTuningOnTelecomCluster/finetune_Nav2 gpu:~/code/nav4rail_finetune_nav2/
+```
+
+Optionnel: si tu as généré le dataset localement, vérifie qu’il est bien inclus (il est sous `finetune_Nav2/dataset_out/`).
+
+### 3) Entraîner sur le cluster (SBATCH)
+
+```bash
+ssh gpu
+cd ~/code/nav4rail_finetune_nav2
+sbatch finetune_Nav2/slurm/job_finetune_nav2_mistral7b.sh
+```
+
+### 4) Surveiller et récupérer les résultats
+
+```bash
+squeue --me
+tail -f nav2_finetune_mistral7b_<JOBID>.out
+```
+
+Les outputs et runs sont écrits dans le dossier copié :
+- adapters: `finetune_Nav2/outputs/.../lora_adapter/`
+- runs: `finetune_Nav2/runs/<id>/`
+
+### 5) Inférence et évaluation
+
+```bash
+cd ~/code/nav4rail_finetune_nav2
+python3 -m finetune_Nav2.eval.run_hf_eval \
+  --model-key mistral7b \
+  --adapter-dir finetune_Nav2/outputs/nav2_steps_mistral7b_lora_<jobid>/lora_adapter \
+  --dataset finetune_Nav2/dataset_out/dataset_nav2_steps.jsonl \
+  --n 10 \
+  --strict-attrs \
+  --strict-blackboard
+```
+
+Génération contrainte (HF):
+
+```bash
+python3 -m finetune_Nav2.eval.run_hf_eval ... --constrained jsonschema
+```
 
 ## Structure
 
@@ -24,5 +80,6 @@ Un mode **expérimental** “XML direct” peut exister dans un sous-dossier iso
 - `train/`: scripts QLoRA (SFT) multi-modèles.
 - `eval/`: inférence, parsing/validation steps, conversion XML, validation BT, métriques, écriture `runs/`.
 - `slurm/`: scripts SBATCH et bonnes pratiques cluster.
-- `GUIDE_LANCEMENT_JOB_NAV2.md`: guide complet (à générer ici).
+- `experimental_xml_direct/`: mode expérimental “XML direct” (isolé).
+- `GUIDE_LANCEMENT_JOB_NAV2.md`: guide complet.
 

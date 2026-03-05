@@ -1,42 +1,17 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping
 
 
-def nav4rails_root() -> Path:
-    """
-    Resolve the nav4rails workspace root from this file location.
-
-    Path layout assumption:
-      nav4rails/
-        repositories/
-          FineTuningOnTelecomCluster/
-            finetune_Nav2/
-              catalog/
-                catalog_io.py  (this file)
-    """
-    return Path(__file__).resolve().parents[4]
-
-
 def default_catalog_path() -> Path:
     """
     Single source of truth for allowed skills and ports.
-    Override with env NAV4RAIL_CATALOG_PATH if needed.
+    By default: finetune_Nav2/catalog/bt_nodes_catalog.json
     """
-    env = (os.getenv("NAV4RAIL_CATALOG_PATH") or "").strip()
-    if env:
-        return Path(env).expanduser().resolve()
-    return (
-        nav4rails_root()
-        / "repositories"
-        / "BT_Navigator"
-        / "script"
-        / "bt_nodes_catalog.json"
-    ).resolve()
+    return (Path(__file__).resolve().parent / "bt_nodes_catalog.json").resolve()
 
 
 def load_catalog(path: str | Path | None = None) -> Dict[str, Any]:
@@ -85,7 +60,7 @@ def all_param_names(catalog: Mapping[str, Any]) -> Dict[str, set[str]]:
 def required_param_names(catalog: Mapping[str, Any]) -> Dict[str, set[str]]:
     """
     Convention: if a port description contains 'optional' -> not required.
-    Mirrors the convention described in docs/spec/bt_contract.md and used by BT_Navigator.
+    Mirrors the convention used by the Nav2 proxy catalog.
     """
     internal_ports = {"ID", "__shared_blackboard"}
     out: Dict[str, set[str]] = {}

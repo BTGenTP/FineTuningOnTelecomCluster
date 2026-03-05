@@ -13,7 +13,7 @@ def main(argv: list[str] | None = None) -> int:
         "--catalog",
         type=str,
         default=str(default_catalog_path()),
-        help="Path to bt_nodes_catalog.json (default: BT_Navigator/script/bt_nodes_catalog.json).",
+        help="Path to bt_nodes_catalog.json (default: finetune_Nav2/catalog/bt_nodes_catalog.json).",
     )
     p.add_argument("--out-gbnf", type=str, default=None, help="Write steps JSON GBNF grammar to this path.")
     args = p.parse_args(argv)
