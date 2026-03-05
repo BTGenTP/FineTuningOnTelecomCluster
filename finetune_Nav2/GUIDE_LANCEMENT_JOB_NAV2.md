@@ -13,6 +13,19 @@ Ce guide décrit une procédure reproductible (style TelecomCluster) pour :
 - **BTs de référence vendored**: `finetune_Nav2/reference_behavior_trees/`
 - **Runs**: `finetune_Nav2/runs/<YYYY-MM-DD>_exp###/` (immuable; ne jamais écraser)
 
+### Important: forme du dossier sur le cluster
+
+Les scripts et imports Python supposent que tu copies **le dossier** `finetune_Nav2/` (pas son contenu) :
+
+```bash
+mkdir -p ~/code/nav4rail_finetune_nav2
+scp -r <local>/repositories/FineTuningOnTelecomCluster/finetune_Nav2 gpu:~/code/nav4rail_finetune_nav2/
+```
+
+Ainsi, sur le cluster tu dois avoir:
+- `~/code/nav4rail_finetune_nav2/finetune_Nav2/requirements.txt`
+- `~/code/nav4rail_finetune_nav2/finetune_Nav2/slurm/*.sh`
+
 ## 1) Hypothèses cluster (à adapter)
 
 Les scripts SBATCH fournis supposent :

@@ -11,14 +11,19 @@ set -euo pipefail
 
 module load python/3.11.13 cuda/12.4.1 || true
 
-# This job assumes you copied `finetune_Nav2/` to this directory on the cluster:
-#   ~/code/nav4rail_finetune_nav2/finetune_Nav2/...
 WORK_DIR="$HOME/code/nav4rail_finetune_nav2"
 VENV_DIR="$HOME/venvs/nav4rail_nav2_steps"
 
 echo "[job] host=$(hostname) jobid=${SLURM_JOB_ID:-unknown} date=$(date -Iseconds)"
 
 cd "$WORK_DIR"
+
+if [ ! -f "$WORK_DIR/finetune_Nav2/requirements.txt" ]; then
+  echo "[job] ERROR: missing $WORK_DIR/finetune_Nav2/requirements.txt"
+  echo "[job] You likely copied finetune_Nav2/* instead of the finetune_Nav2/ folder."
+  echo "[job] Fix: scp -r <local>/finetune_Nav2 gpu:~/code/nav4rail_finetune_nav2/"
+  exit 1
+fi
 
 if [ ! -d "$VENV_DIR" ]; then
   python3 -m venv "$VENV_DIR"

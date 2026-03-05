@@ -26,13 +26,14 @@ python3 -m finetune_Nav2.dataset.generate_dataset_nav2_steps \
 
 ### 2) Copier sur le cluster (comme TelecomCluster)
 
-On copie uniquement `finetune_Nav2/` (self-contained) dans un dossier dédié du cluster :
+On copie uniquement le contenu self-contained de `finetune_Nav2/` dans un dossier dédié du cluster :
 
 ```bash
+mkdir -p ~/code/nav4rail_finetune_nav2
 scp -r repositories/FineTuningOnTelecomCluster/finetune_Nav2 gpu:~/code/nav4rail_finetune_nav2/
 ```
 
-Optionnel: si tu as généré le dataset localement, vérifie qu’il est bien inclus (il est sous `finetune_Nav2/dataset_out/`).
+Optionnel: si tu as généré le dataset localement, vérifie qu’il est bien inclus (il est sous `dataset_out/` dans le dossier copié).
 
 ### 3) Entraîner sur le cluster (SBATCH)
 
