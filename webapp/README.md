@@ -1,21 +1,13 @@
 # NAV4RAIL — Behavior Tree Generator (Web App)
 
-Interface web locale pour générer des Behavior Trees à partir de missions en langage naturel.
-
-Deux modes coexistent désormais :
-
-- `NAV4RAIL XML direct` : pipeline historique GGUF + XML direct
-- `ROS2 Nav2 steps JSON` : pipeline alternatif HF + LoRA `finetune_Nav2/` avec sortie stricte `steps JSON -> BT XML -> validation`
+Interface web locale pour générer des Behavior Trees XML (BT.CPP v4) à partir de missions en langage naturel, propulsée par un modèle Mistral-7B fine-tuné et quantifié en GGUF.
 
 ## Architecture
 
 ```
 webapp/
 ├── app.py                  # Serveur FastAPI (5 endpoints)
-├── inference.py             # Moteur d'inférence GGUF + validation (legacy)
-├── inference_nav2.py        # Moteur d'inférence HF + LoRA pour Nav2
-├── nav2_pipeline.py         # Parsing strict JSON -> XML -> validation stricte
-├── ros_nav2_client.py       # Client HTTP vers ROS2_Container
+├── inference.py             # Moteur d'inférence GGUF + validation
 ├── merge_and_convert.py     # Script de merge LoRA (cluster uniquement)
 ├── job_merge_gguf.sh        # Job SLURM pour merge + conversion GGUF
 ├── requirements.txt         # Dépendances Python
@@ -43,21 +35,13 @@ webapp/
 
 ### Endpoints API
 
-| Route                      | Méthode | Description                                              |
-| -------------------------- | ------- | -------------------------------------------------------- |
-| `/`                        | GET     | Page HTML principale                                     |
-| `/api/status`              | GET     | État du modèle legacy GGUF                               |
-| `/api/examples`            | GET     | Exemples de missions legacy                              |
-| `/api/generate`            | POST    | Génère un BT XML via le mode legacy                      |
-| `/api/validate`            | POST    | Valide un XML BT legacy                                  |
-| `/api/nav2/status`         | GET     | État du backend Nav2 HF + LoRA                           |
-| `/api/nav2/examples`       | GET     | Exemples de missions Nav2                                |
-| `/api/nav2/generate`       | POST    | Génère `steps JSON`, construit le BT XML et le valide    |
-| `/api/nav2/validate/steps` | POST    | Valide uniquement une liste JSON d'étapes                |
-| `/api/nav2/steps-to-xml`   | POST    | Convertit des `steps JSON` valides vers un BT XML        |
-| `/api/nav2/validate/xml`   | POST    | Valide un XML Nav2 avec le validator strict              |
-| `/api/nav2/transfer`       | POST    | Transfère un BT XML au `ROS2_Container`                  |
-| `/api/nav2/execute`        | POST    | Transfère puis déclenche l'exécution dans `ROS2_Container` |
+| Route           | Méthode | Description                                      |
+| --------------- | ------- | ------------------------------------------------ |
+| `/`             | GET     | Page HTML principale                             |
+| `/api/status`   | GET     | `{loaded: bool}` — état du modèle                |
+| `/api/examples` | GET     | `{missions: [...]}` — exemples de missions       |
+| `/api/generate` | POST    | Génère un BT XML à partir d'une mission          |
+| `/api/validate` | POST    | Valide un XML BT existant (sans génération)      |
 
 ### Format de réponse `/api/generate`
 
@@ -173,27 +157,6 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8000
 Le modèle se charge au démarrage (~2 min sur CPU, ~5.5 GB RAM).
 L'interface est accessible sur **http://localhost:8000**.
 
-### Mode `ROS2 Nav2 steps JSON`
-
-Le mode Nav2 s'appuie sur `transformers + peft` et charge un adapter LoRA
-au premier appel sur `/api/nav2/generate`.
-
-Variables utiles :
-
-```bash
-export NAV2_MODEL_KEY=mistral7b
-export NAV2_ADAPTER_DIR=../finetune_Nav2/outputs/nav2_steps_mistral7b_lora_743587/lora_adapter
-export NAV2_LOAD_IN_4BIT=1
-export ROS2_CONTROL_API_BASE=http://localhost:8001
-```
-
-Ce mode produit :
-
-- `steps JSON` stricts
-- le BT XML dérivé
-- le rapport du validator strict
-- un `run_dir` optionnel compatible avec `finetune_Nav2/runs/`
-
 ---
 
 ## Configuration requise
@@ -227,18 +190,9 @@ Si l'adapter LoRA est mis à jour après un nouveau fine-tuning :
 
 ---
 
-## Fichiers partagés avec `finetune/` et `finetune_Nav2`
-
-Mode legacy :
+## Fichiers partagés avec `finetune/`
 
 - `finetune/validate_bt.py` → validation multi-niveaux L1/L2/L3
 - `finetune/nav4rail_grammar.py` → grammaire GBNF pour décodage contraint
 
-Mode Nav2 :
-
-- `finetune_Nav2/eval/steps_parsing.py` → validation stricte des `steps JSON`
-- `finetune_Nav2/eval/json_to_xml.py` → transformation `steps -> BT XML`
-- `finetune_Nav2/eval/bt_validation.py` → validator strict attrs + blackboard
-- `finetune_Nav2/train/prompting.py` et `train/model_registry.py` → prompts et config modèle
-
-Les constantes `SYSTEM_PROMPT`, `SKILLS_DOC` et `TEST_MISSIONS` restent dupliquées côté legacy dans `inference.py`.
+Les constantes `SYSTEM_PROMPT`, `SKILLS_DOC` et `TEST_MISSIONS` sont dupliquées dans `inference.py` pour éviter d'importer tout `finetune_lora_xml.py` (qui nécessite torch/peft).

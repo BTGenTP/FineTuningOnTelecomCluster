@@ -42,27 +42,6 @@ header h1 {
     margin-top: 0.3rem;
 }
 
-.mode-row {
-    margin-top: 0.75rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.6rem;
-}
-
-.mode-row label {
-    color: var(--text-muted);
-    font-size: 0.85rem;
-}
-
-select, input[type="number"] {
-    background: var(--surface);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 0.5rem;
-    padding: 0.45rem 0.6rem;
-}
-
 .status-badge {
     display: inline-block;
     padding: 0.2rem 0.7rem;
@@ -120,7 +99,6 @@ textarea:focus { outline: 2px solid var(--primary); border-color: transparent; }
 .controls {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
     gap: 1rem;
     margin-top: 0.75rem;
 }
@@ -181,20 +159,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 
 .validate-section button { margin-top: 0.5rem; }
-
-.nav2-options {
-    margin-top: 0.75rem;
-    display: flex;
-    gap: 0.75rem;
-}
-
-.nav2-options label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    font-size: 0.8rem;
-    color: var(--text-muted);
-}
 
 /* ─── Output panel ────────────────────────────────────────────── */
 
@@ -308,13 +272,6 @@ code .comment { color: var(--text-muted); font-style: italic; }
     font-size: 0.8rem;
     color: var(--text-muted);
     margin-bottom: 0.5rem;
-}
-
-.run-dir {
-    margin-bottom: 0.75rem;
-    font-size: 0.8rem;
-    color: var(--text-muted);
-    font-family: monospace;
 }
 
 /* ─── Validation panel ────────────────────────────────────────── */

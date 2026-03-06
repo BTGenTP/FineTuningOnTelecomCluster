@@ -10,13 +10,6 @@
     <header>
         <h1>NAV4RAIL — Behavior Tree Generator</h1>
         <p class="subtitle">Mission en langage naturel &rarr; BehaviorTree XML (BT.CPP v4)</p>
-        <div class="mode-row">
-            <label for="mode-select">Mode</label>
-            <select id="mode-select">
-                <option value="legacy">NAV4RAIL XML direct</option>
-                <option value="nav2">ROS2 Nav2 steps JSON</option>
-            </select>
-        </div>
         <div id="model-status" class="status-badge loading">Chargement du modele...</div>
     </header>
 
@@ -29,24 +22,9 @@
             <div class="controls">
                 <label class="checkbox-label">
                     <input type="checkbox" id="use-grammar" checked>
-                    <span id="constraint-label">Decodage contraint (GBNF)</span>
-                </label>
-                <label class="checkbox-label" id="write-run-label">
-                    <input type="checkbox" id="write-run" checked>
-                    Ecrire un run reproductible
+                    Decodage contraint (GBNF)
                 </label>
                 <button id="btn-generate" onclick="generate()" disabled>Generer</button>
-            </div>
-
-            <div class="nav2-options hidden" id="nav2-options">
-                <label>
-                    Max new tokens
-                    <input type="number" id="max-new-tokens" value="256" min="32" max="1024">
-                </label>
-                <label>
-                    Temperature
-                    <input type="number" id="temperature" value="0.0" step="0.1" min="0" max="1.5">
-                </label>
             </div>
 
             <div class="examples">
@@ -79,18 +57,6 @@
             </div>
 
             <div id="result" class="hidden">
-                <div id="run-dir" class="run-dir hidden"></div>
-
-                <div id="steps-panel" class="hidden">
-                    <h2>Steps JSON</h2>
-                    <pre><code id="steps-output"></code></pre>
-                </div>
-
-                <div id="raw-steps-panel" class="hidden">
-                    <h3>Sortie brute du modele</h3>
-                    <pre><code id="raw-steps-output"></code></pre>
-                </div>
-
                 <h2>Behavior Tree XML</h2>
                 <div class="gen-time" id="gen-time"></div>
                 <pre><code id="xml-output"></code></pre>
