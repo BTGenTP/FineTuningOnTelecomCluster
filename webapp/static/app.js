@@ -1,42 +1,95 @@
-// ─── NAV4RAIL BT Generator — Frontend ───────────────────────────────────────
+const MAX_TIME_S = 240;
 
-const MAX_TIME_S = 240; // 4 minutes timeout
+const MODE_CONFIG = {
+    legacy: {
+        status: "/api/status",
+        examples: "/api/examples",
+        generate: "/api/generate",
+        validate: "/api/validate",
+        missionPlaceholder: "Ex: Navigue jusqu'au km 42 depuis le km 10",
+        constraintLabel: "Decodage contraint (GBNF)",
+        supportsNav2Options: false,
+    },
+    nav2: {
+        status: "/api/nav2/status",
+        examples: "/api/nav2/examples",
+        generate: "/api/nav2/generate",
+        validate: "/api/nav2/validate/xml",
+        missionPlaceholder: "Ex: Navigue vers le goal (Nav2), puis attends 2.0 s.",
+        constraintLabel: "Decodage contraint JSON (lm-format-enforcer)",
+        supportsNav2Options: true,
+    },
+};
+
+let progressInterval = null;
+let progressStart = 0;
 
 document.addEventListener("DOMContentLoaded", () => {
-    checkStatus();
-    loadExamples();
+    document.getElementById("mode-select").addEventListener("change", refreshModeUi);
+    refreshModeUi();
 });
 
-// ─── Model status ───────────────────────────────────────────────────────────
+function currentMode() {
+    return document.getElementById("mode-select").value;
+}
+
+function currentConfig() {
+    return MODE_CONFIG[currentMode()];
+}
+
+function refreshModeUi() {
+    const config = currentConfig();
+    document.getElementById("mission").placeholder = config.missionPlaceholder;
+    document.getElementById("constraint-label").textContent = config.constraintLabel;
+    document.getElementById("nav2-options").classList.toggle("hidden", !config.supportsNav2Options);
+    document.getElementById("write-run-label").classList.toggle("hidden", !config.supportsNav2Options);
+    checkStatus();
+    loadExamples();
+}
 
 async function checkStatus() {
     const badge = document.getElementById("model-status");
     const btn = document.getElementById("btn-generate");
     try {
-        const res = await fetch("/api/status");
+        const res = await fetch(currentConfig().status);
         const data = await res.json();
-        if (data.loaded) {
+        if (currentMode() === "nav2") {
+            if (data.loaded) {
+                badge.textContent = `Modele Nav2 pret (${data.model_key})`;
+                badge.className = "status-badge ready";
+                btn.disabled = false;
+            } else if (data.configured) {
+                badge.textContent = "Adapter Nav2 configure, chargement a la demande";
+                badge.className = "status-badge loading";
+                btn.disabled = false;
+            } else {
+                badge.textContent = "Adapter Nav2 absent";
+                badge.className = "status-badge error";
+                btn.disabled = true;
+            }
+        } else if (data.loaded) {
             badge.textContent = "Modele pret";
             badge.className = "status-badge ready";
             btn.disabled = false;
         } else {
             badge.textContent = "Modele non charge";
             badge.className = "status-badge error";
+            btn.disabled = true;
         }
     } catch {
         badge.textContent = "Serveur injoignable";
         badge.className = "status-badge error";
+        btn.disabled = true;
     }
 }
 
-// ─── Load examples ──────────────────────────────────────────────────────────
-
 async function loadExamples() {
     try {
-        const res = await fetch("/api/examples");
+        const res = await fetch(currentConfig().examples);
         const data = await res.json();
         const container = document.getElementById("example-list");
-        data.missions.forEach(mission => {
+        container.innerHTML = "";
+        data.missions.forEach((mission) => {
             const btn = document.createElement("button");
             btn.className = "example-btn";
             btn.textContent = mission;
@@ -45,13 +98,10 @@ async function loadExamples() {
             };
             container.appendChild(btn);
         });
-    } catch { /* ignore */ }
+    } catch {
+        // ignore
+    }
 }
-
-// ─── Progress bar ───────────────────────────────────────────────────────────
-
-let progressInterval = null;
-let progressStart = 0;
 
 function startProgress() {
     progressStart = Date.now();
@@ -66,25 +116,21 @@ function startProgress() {
     setStep("step-validate", "");
     text.textContent = "Preparation du prompt...";
 
-    // After 2s, switch to inference step
     setTimeout(() => {
         setStep("step-prompt", "done");
         setStep("step-inference", "active");
         text.textContent = "Inference en cours...";
-    }, 2000);
+    }, 1500);
 
     progressInterval = setInterval(() => {
         const elapsed = (Date.now() - progressStart) / 1000;
         const pct = Math.min((elapsed / MAX_TIME_S) * 100, 100);
-
         bar.style.width = pct + "%";
 
         const elMin = Math.floor(elapsed / 60);
         const elSec = Math.floor(elapsed % 60);
-        timer.textContent =
-            `${elMin}:${String(elSec).padStart(2, "0")} / 4:00`;
+        timer.textContent = `${elMin}:${String(elSec).padStart(2, "0")} / 4:00`;
 
-        // Color transitions
         if (pct > 85) {
             bar.classList.add("timeout");
             text.textContent = "Bientot termine...";
@@ -107,7 +153,6 @@ function stopProgress(success) {
 
     const bar = document.getElementById("progress-bar");
     const text = document.getElementById("progress-text");
-
     if (success) {
         bar.style.width = "100%";
         bar.classList.remove("timeout");
@@ -122,16 +167,13 @@ function setStep(id, cls) {
     el.className = "step" + (cls ? " " + cls : "");
 }
 
-// ─── Generate BT ────────────────────────────────────────────────────────────
-
 async function generate() {
     const mission = document.getElementById("mission").value.trim();
     if (!mission) return;
 
-    const useGrammar = document.getElementById("use-grammar").checked;
     const btn = document.getElementById("btn-generate");
+    const useConstraint = document.getElementById("use-grammar").checked;
 
-    // Show loading
     document.getElementById("loading").classList.remove("hidden");
     document.getElementById("result").classList.add("hidden");
     btn.disabled = true;
@@ -141,27 +183,36 @@ async function generate() {
     const timeoutId = setTimeout(() => controller.abort(), MAX_TIME_S * 1000);
 
     try {
-        const res = await fetch("/api/generate", {
+        const body = currentMode() === "nav2"
+            ? {
+                mission,
+                constrained: useConstraint ? "jsonschema" : "off",
+                max_new_tokens: parseInt(document.getElementById("max-new-tokens").value, 10) || 256,
+                temperature: parseFloat(document.getElementById("temperature").value || "0"),
+                write_run: document.getElementById("write-run").checked,
+            }
+            : {
+                mission,
+                use_grammar: useConstraint,
+            };
+
+        const res = await fetch(currentConfig().generate, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ mission, use_grammar: useGrammar }),
+            body: JSON.stringify(body),
             signal: controller.signal,
         });
-
         clearTimeout(timeoutId);
 
+        const data = await res.json();
         if (!res.ok) {
-            const err = await res.json();
-            alert(err.error || "Erreur serveur");
+            alert(data.error || "Erreur serveur");
             stopProgress(false);
             return;
         }
 
-        const data = await res.json();
         stopProgress(true);
-
-        // Short delay so user sees 100% before result
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise((resolve) => setTimeout(resolve, 300));
         displayResult(data);
     } catch (e) {
         clearTimeout(timeoutId);
@@ -177,14 +228,12 @@ async function generate() {
     }
 }
 
-// ─── Validate only ──────────────────────────────────────────────────────────
-
 async function validateOnly() {
     const xml = document.getElementById("xml-input").value.trim();
     if (!xml) return;
 
     try {
-        const res = await fetch("/api/validate", {
+        const res = await fetch(currentConfig().validate, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ xml }),
@@ -196,51 +245,69 @@ async function validateOnly() {
     }
 }
 
-// ─── Display result ─────────────────────────────────────────────────────────
-
 function displayResult(data) {
     document.getElementById("result").classList.remove("hidden");
 
-    // XML with syntax highlighting
-    document.getElementById("xml-output").innerHTML = highlightXml(data.xml);
+    const xml = data.xml || "";
+    document.getElementById("xml-output").innerHTML = xml ? highlightXml(xml) : escapeHtml("(aucun XML genere)");
 
-    // Generation time
     const genTime = document.getElementById("gen-time");
-    if (data.generation_time_s != null) {
-        genTime.textContent = `Genere en ${data.generation_time_s}s`;
+    genTime.textContent = data.generation_time_s != null ? `Genere en ${data.generation_time_s}s` : "";
+
+    const runDir = document.getElementById("run-dir");
+    if (data.run_dir) {
+        runDir.classList.remove("hidden");
+        runDir.textContent = `Run: ${data.run_dir}`;
     } else {
-        genTime.textContent = "";
+        runDir.classList.add("hidden");
+        runDir.textContent = "";
     }
 
-    // Score bar
+    const stepsPanel = document.getElementById("steps-panel");
+    const stepsOutput = document.getElementById("steps-output");
+    if (data.steps_json) {
+        stepsPanel.classList.remove("hidden");
+        stepsOutput.textContent = formatJsonBlock(data.steps_json);
+    } else {
+        stepsPanel.classList.add("hidden");
+        stepsOutput.textContent = "";
+    }
+
+    const rawStepsPanel = document.getElementById("raw-steps-panel");
+    const rawStepsOutput = document.getElementById("raw-steps-output");
+    if (data.raw_steps) {
+        rawStepsPanel.classList.remove("hidden");
+        rawStepsOutput.textContent = data.raw_steps;
+    } else {
+        rawStepsPanel.classList.add("hidden");
+        rawStepsOutput.textContent = "";
+    }
+
+    const score = data.score != null ? data.score : (data.valid ? 1.0 : 0.0);
     const scoreBar = document.getElementById("score-bar");
     const scoreValue = document.getElementById("score-value");
-    scoreBar.style.width = (data.score * 100) + "%";
-    scoreBar.style.background = data.score > 0.8 ? "var(--green)"
-                              : data.score > 0.5 ? "var(--yellow)" : "var(--red)";
-    scoreValue.textContent = data.score.toFixed(2);
+    scoreBar.style.width = (score * 100) + "%";
+    scoreBar.style.background = score > 0.8 ? "var(--green)"
+        : score > 0.5 ? "var(--yellow)" : "var(--red)";
+    scoreValue.textContent = score.toFixed(2);
 
-    // Valid badge
     const badge = document.getElementById("valid-badge");
     badge.textContent = data.valid ? "VALIDE" : "INVALIDE";
     badge.className = "status-badge " + (data.valid ? "valid" : "invalid");
 
-    // Level badges
     const errors = data.errors || [];
-    const hasL1 = errors.some(e => e.startsWith("[L1]"));
-    const hasL2 = errors.some(e => e.startsWith("[L2]"));
-    const hasL3 = errors.some(e => e.startsWith("[L3]"));
+    const hasL1 = errors.some((e) => e.startsWith("[L1]"));
+    const hasL2 = errors.some((e) => e.startsWith("[L2]"));
+    const hasL3 = errors.some((e) => e.startsWith("[L3]"));
+    setLevel("level-l1", currentMode() === "nav2" ? data.valid : !hasL1);
+    setLevel("level-l2", currentMode() === "nav2" ? data.valid : !hasL2);
+    setLevel("level-l3", currentMode() === "nav2" ? data.valid : !hasL3);
 
-    setLevel("level-l1", !hasL1);
-    setLevel("level-l2", !hasL2);
-    setLevel("level-l3", !hasL3);
-
-    // Warnings
     const warningsList = document.getElementById("warnings-list");
     const warnings = data.warnings || [];
     if (warnings.length > 0) {
         warningsList.classList.remove("hidden");
-        warningsList.innerHTML = warnings.map(w =>
+        warningsList.innerHTML = warnings.map((w) =>
             `<div class="warning-item">${escapeHtml(w)}</div>`
         ).join("");
     } else {
@@ -248,11 +315,10 @@ function displayResult(data) {
         warningsList.innerHTML = "";
     }
 
-    // Errors
     const errorsList = document.getElementById("errors-list");
     if (errors.length > 0) {
         errorsList.classList.remove("hidden");
-        errorsList.innerHTML = errors.map(e =>
+        errorsList.innerHTML = errors.map((e) =>
             `<div class="error-item">${escapeHtml(e)}</div>`
         ).join("");
     } else {
@@ -266,17 +332,20 @@ function setLevel(id, pass) {
     el.className = "level-badge " + (pass ? "pass" : "fail");
 }
 
-// ─── XML syntax highlighting ────────────────────────────────────────────────
+function formatJsonBlock(value) {
+    try {
+        return JSON.stringify(JSON.parse(value), null, 2);
+    } catch {
+        return value;
+    }
+}
 
 function highlightXml(xml) {
     let s = escapeHtml(xml);
-    // Tags: <TagName or </TagName
-    s = s.replace(/&lt;(\/?)([\w]+)/g, '&lt;$1<span class="tag">$2</span>');
-    // Attributes: name="value"
+    s = s.replace(/&lt;(\/?)([\w]+)/g, "&lt;$1<span class=\"tag\">$2</span>");
     s = s.replace(/([\w-]+)=&quot;([^&]*)&quot;/g,
-        '<span class="attr">$1</span>=&quot;<span class="val">$2</span>&quot;');
-    // Self-closing />
-    s = s.replace(/\/&gt;/g, '<span class="tag">/</span>&gt;');
+        "<span class=\"attr\">$1</span>=&quot;<span class=\"val\">$2</span>&quot;");
+    s = s.replace(/\/&gt;/g, "<span class=\"tag\">/</span>&gt;");
     return s;
 }
 
@@ -286,7 +355,6 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// Enter key in textarea triggers generation
 document.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && e.ctrlKey) {
         e.preventDefault();
