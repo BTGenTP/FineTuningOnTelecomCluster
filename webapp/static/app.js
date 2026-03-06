@@ -1,10 +1,15 @@
 // ─── NAV4RAIL BT Generator — Frontend ───────────────────────────────────────
 
-const MAX_TIME_S = 240; // 4 minutes timeout
+const MAX_TIME_S = 900; // 15 minutes timeout
+let generating = false;
+let isLocalGeneration = false; // true only on the instance that triggered generate()
+let history = [];
 
 document.addEventListener("DOMContentLoaded", () => {
     checkStatus();
     loadExamples();
+    fetchHistory();
+    connectSSE();
 });
 
 // ─── Model status ───────────────────────────────────────────────────────────
@@ -13,7 +18,7 @@ async function checkStatus() {
     const badge = document.getElementById("model-status");
     const btn = document.getElementById("btn-generate");
     try {
-        const res = await fetch("/api/status");
+        const res = await fetch("api/status");
         const data = await res.json();
         if (data.loaded) {
             badge.textContent = "Modele pret";
@@ -33,7 +38,7 @@ async function checkStatus() {
 
 async function loadExamples() {
     try {
-        const res = await fetch("/api/examples");
+        const res = await fetch("api/examples");
         const data = await res.json();
         const container = document.getElementById("example-list");
         data.missions.forEach(mission => {
@@ -53,8 +58,8 @@ async function loadExamples() {
 let progressInterval = null;
 let progressStart = 0;
 
-function startProgress() {
-    progressStart = Date.now();
+function startProgress(serverStartEpoch) {
+    progressStart = serverStartEpoch ? serverStartEpoch * 1000 : Date.now();
     const bar = document.getElementById("progress-bar");
     const text = document.getElementById("progress-text");
     const timer = document.getElementById("progress-timer");
@@ -82,7 +87,7 @@ function startProgress() {
         const elMin = Math.floor(elapsed / 60);
         const elSec = Math.floor(elapsed % 60);
         timer.textContent =
-            `${elMin}:${String(elSec).padStart(2, "0")} / 4:00`;
+            `${elMin}:${String(elSec).padStart(2, "0")} / ${Math.floor(MAX_TIME_S/60)}:00`;
 
         // Color transitions
         if (pct > 85) {
@@ -94,7 +99,7 @@ function startProgress() {
 
         if (elapsed >= MAX_TIME_S) {
             clearInterval(progressInterval);
-            text.textContent = "Timeout depasse (4 min)";
+            text.textContent = "Timeout depasse (15 min)";
         }
     }, 1000);
 }
@@ -126,8 +131,10 @@ function setStep(id, cls) {
 
 async function generate() {
     const mission = document.getElementById("mission").value.trim();
-    if (!mission) return;
+    if (!mission || generating) return;
 
+    generating = true;
+    isLocalGeneration = true;
     const useGrammar = document.getElementById("use-grammar").checked;
     const btn = document.getElementById("btn-generate");
 
@@ -141,7 +148,7 @@ async function generate() {
     const timeoutId = setTimeout(() => controller.abort(), MAX_TIME_S * 1000);
 
     try {
-        const res = await fetch("/api/generate", {
+        const res = await fetch("api/generate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ mission, use_grammar: useGrammar }),
@@ -162,7 +169,7 @@ async function generate() {
 
         // Short delay so user sees 100% before result
         await new Promise(r => setTimeout(r, 500));
-        displayResult(data);
+        displayResult(data, "generate", mission);
     } catch (e) {
         clearTimeout(timeoutId);
         stopProgress(false);
@@ -172,6 +179,8 @@ async function generate() {
             alert("Erreur de connexion: " + e.message);
         }
     } finally {
+        generating = false;
+        isLocalGeneration = false;
         document.getElementById("loading").classList.add("hidden");
         btn.disabled = false;
     }
@@ -184,13 +193,13 @@ async function validateOnly() {
     if (!xml) return;
 
     try {
-        const res = await fetch("/api/validate", {
+        const res = await fetch("api/validate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ xml }),
         });
         const data = await res.json();
-        displayResult({ ...data, xml, generation_time_s: null });
+        displayResult({ ...data, xml, generation_time_s: null }, "validate");
     } catch (e) {
         alert("Erreur: " + e.message);
     }
@@ -198,8 +207,13 @@ async function validateOnly() {
 
 // ─── Display result ─────────────────────────────────────────────────────────
 
-function displayResult(data) {
+function displayResult(data, mode, mission) {
     document.getElementById("result").classList.remove("hidden");
+
+    // Set mode class on validation panel
+    const vPanel = document.getElementById("validation-panel");
+    vPanel.classList.remove("mode-generate", "mode-validate");
+    vPanel.classList.add(mode === "validate" ? "mode-validate" : "mode-generate");
 
     // XML with syntax highlighting
     document.getElementById("xml-output").innerHTML = highlightXml(data.xml);
@@ -216,8 +230,12 @@ function displayResult(data) {
     const scoreBar = document.getElementById("score-bar");
     const scoreValue = document.getElementById("score-value");
     scoreBar.style.width = (data.score * 100) + "%";
-    scoreBar.style.background = data.score > 0.8 ? "var(--green)"
-                              : data.score > 0.5 ? "var(--yellow)" : "var(--red)";
+    if (mode !== "validate") {
+        scoreBar.style.background = data.score > 0.8 ? "var(--green)"
+                                  : data.score > 0.5 ? "var(--yellow)" : "var(--red)";
+    } else {
+        scoreBar.style.background = "";
+    }
     scoreValue.textContent = data.score.toFixed(2);
 
     // Valid badge
@@ -259,6 +277,97 @@ function displayResult(data) {
         errorsList.classList.add("hidden");
         errorsList.innerHTML = "";
     }
+
+}
+
+// ─── History sync ────────────────────────────────────────────────────────────
+
+async function fetchHistory() {
+    try {
+        const res = await fetch("api/history");
+        history = await res.json();
+        renderHistory();
+    } catch { /* ignore */ }
+}
+
+function connectSSE() {
+    const source = new EventSource("api/history/stream");
+    source.addEventListener("history", (e) => {
+        history = JSON.parse(e.data);
+        renderHistory();
+    });
+    source.addEventListener("gen_status", (e) => {
+        if (isLocalGeneration) return; // the local instance manages its own UI
+        const info = JSON.parse(e.data);
+        const loading = document.getElementById("loading");
+        const btn = document.getElementById("btn-generate");
+        if (info.status === "running") {
+            loading.classList.remove("hidden");
+            document.getElementById("result").classList.add("hidden");
+            btn.disabled = true;
+            startProgress(info.started_at);
+            const missionLabel = document.getElementById("progress-text");
+            if (info.mission) {
+                missionLabel.textContent = "Generation en cours: " + info.mission;
+            }
+        } else {
+            stopProgress(true);
+            setTimeout(() => { loading.classList.add("hidden"); }, 800);
+            btn.disabled = false;
+        }
+    });
+    source.onerror = () => {
+        setTimeout(() => connectSSE(), 3000);
+        source.close();
+    };
+}
+
+function renderHistory() {
+    const container = document.getElementById("history-list");
+    if (history.length === 0) {
+        container.innerHTML = '<p class="text-muted">Aucune generation pour le moment.</p>';
+        return;
+    }
+    container.innerHTML = "";
+    history.forEach((h, i) => {
+        const item = document.createElement("div");
+        item.className = "history-item";
+        const label = h.mode === "generate"
+            ? `<span class="history-mode gen">GEN</span>`
+            : `<span class="history-mode val">VAL</span>`;
+        const scoreColor = h.score > 0.8 ? "var(--green)" : h.score > 0.5 ? "var(--yellow)" : "var(--red)";
+        const xmlId = "history-xml-" + i;
+        item.innerHTML = `
+            <div class="history-header">
+                ${label}
+                <span class="history-time">${h.time}</span>
+                <span class="history-score" style="color:${scoreColor}">${h.score.toFixed(2)}</span>
+                <span class="history-valid ${h.valid ? 'pass' : 'fail'}">${h.valid ? "OK" : "KO"}</span>
+                <button class="history-toggle" onclick="event.stopPropagation(); toggleHistoryXml('${xmlId}', this)">XML</button>
+            </div>
+            <div class="history-mission">${h.mission ? escapeHtml(h.mission) : "<em>Validation manuelle</em>"}</div>
+            <div class="history-xml hidden" id="${xmlId}">
+                <pre><code>${highlightXml(h.xml)}</code></pre>
+            </div>
+        `;
+        item.onclick = () => loadHistoryEntry(i);
+        container.appendChild(item);
+    });
+}
+
+function toggleHistoryXml(id, btn) {
+    const el = document.getElementById(id);
+    const visible = !el.classList.contains("hidden");
+    el.classList.toggle("hidden");
+    btn.classList.toggle("active", !visible);
+}
+
+function loadHistoryEntry(index) {
+    const h = history[index];
+    if (h.mission) {
+        document.getElementById("mission").value = h.mission;
+    }
+    document.getElementById("xml-input").value = h.xml;
 }
 
 function setLevel(id, pass) {

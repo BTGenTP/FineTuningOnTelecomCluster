@@ -356,3 +356,137 @@ code .comment { color: var(--text-muted); font-style: italic; }
     border-left: 3px solid var(--red);
     color: var(--red);
 }
+
+/* ─── History panel ──────────────────────────────────────────── */
+
+.history-panel {
+    grid-column: 1 / -1;
+    background: var(--surface);
+    border-radius: 0.75rem;
+    padding: 1.5rem;
+    border: 1px solid var(--border);
+}
+
+.history-list { display: flex; flex-direction: column; gap: 0.4rem; }
+
+.history-item {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    padding: 0.6rem 0.75rem;
+    cursor: pointer;
+    transition: border-color 0.15s;
+}
+
+.history-item:hover { border-color: var(--primary); }
+
+.history-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.8rem;
+}
+
+.history-mode {
+    padding: 0.1rem 0.4rem;
+    border-radius: 0.25rem;
+    font-weight: 700;
+    font-size: 0.7rem;
+}
+
+.history-mode.gen { background: var(--primary); color: #fff; }
+.history-mode.val { background: var(--surface-alt); color: var(--text-muted); }
+
+.history-time { color: var(--text-muted); font-family: monospace; }
+.history-score { font-weight: 700; }
+
+.history-valid {
+    padding: 0.1rem 0.35rem;
+    border-radius: 0.2rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+}
+
+.history-valid.pass { background: rgba(34, 197, 94, 0.2); color: var(--green); }
+.history-valid.fail { background: rgba(239, 68, 68, 0.2); color: var(--red); }
+
+.history-mission {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin-top: 0.25rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.text-muted { color: var(--text-muted); font-size: 0.85rem; }
+
+.history-toggle {
+    margin-left: auto;
+    padding: 0.1rem 0.45rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    background: var(--surface-alt);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 0.25rem;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.history-toggle:hover,
+.history-toggle.active {
+    background: var(--primary);
+    color: #fff;
+    border-color: var(--primary);
+}
+
+.history-xml {
+    margin-top: 0.5rem;
+}
+
+.history-xml pre {
+    max-height: 250px;
+    font-size: 0.75rem;
+}
+
+/* ─── Validation-only mode: outlined / muted indicators ────── */
+
+.mode-validate .score-bar {
+    opacity: 0.6;
+    background: repeating-linear-gradient(
+        45deg,
+        transparent, transparent 4px,
+        rgba(255,255,255,0.08) 4px, rgba(255,255,255,0.08) 8px
+    ), var(--surface-alt) !important;
+}
+
+.mode-validate .score-value { opacity: 0.7; }
+
+.mode-validate .level-badge.pass {
+    border-style: dashed;
+    background: transparent;
+}
+
+.mode-validate .level-badge.fail {
+    border-style: dashed;
+    background: transparent;
+}
+
+.mode-validate .level-badge.pass .level-icon::before { content: "\2713"; color: var(--text-muted); }
+.mode-validate .level-badge.fail .level-icon::before { content: "\2717"; color: var(--yellow); }
+
+.mode-validate #valid-badge {
+    background: transparent;
+    border: 2px solid;
+}
+
+.mode-validate #valid-badge.valid {
+    border-color: var(--green);
+    color: var(--green);
+}
+
+.mode-validate #valid-badge.invalid {
+    border-color: var(--yellow);
+    color: var(--yellow);
+}

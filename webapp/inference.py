@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 # Import validation and grammar from finetune/
-FINETUNE_DIR = Path(__file__).resolve().parent.parent / "finetune"
+FINETUNE_DIR = Path(__file__).resolve().parent / "finetune"
 sys.path.insert(0, str(FINETUNE_DIR))
 
 from validate_bt import validate_bt  # noqa: E402
