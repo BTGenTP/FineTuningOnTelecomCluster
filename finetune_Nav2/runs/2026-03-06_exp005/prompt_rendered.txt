@@ -1,0 +1,1 @@
+Navigue vers le goal (nav2), puis efface la costmap locale, puis attends 0.5 s.

@@ -30,3 +30,7 @@ webapp/__pycache__/
 *.7z
 finetune_Nav2/train/__pycache__/model_registry.cpython-310.pyc
 finetune_Nav2/train/__pycache__/prompting.cpython-310.pyc
+
+finetune_Nav2/outputs/*
+finetune_Nav2/logs/*
+

@@ -96,5 +96,4 @@ python3 -m finetune_Nav2.eval.run_hf_eval ... --constrained jsonschema
 - `eval/`: inférence, parsing/validation steps, conversion XML, validation BT, métriques, écriture `runs/`.
 - `slurm/`: scripts SBATCH et bonnes pratiques cluster.
 - `experimental_xml_direct/`: mode expérimental “XML direct” (isolé).
-- `GUIDE_LANCEMENT_JOB_NAV2.md`: guide complet.
 
