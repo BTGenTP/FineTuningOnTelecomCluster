@@ -192,6 +192,8 @@ Si l'adapter LoRA est mis à jour après un nouveau fine-tuning :
 
 ## Fichiers partagés avec `finetune/`
 
+L'application importe directement depuis `finetune/` :
+
 - `finetune/validate_bt.py` → validation multi-niveaux L1/L2/L3
 - `finetune/nav4rail_grammar.py` → grammaire GBNF pour décodage contraint
 
