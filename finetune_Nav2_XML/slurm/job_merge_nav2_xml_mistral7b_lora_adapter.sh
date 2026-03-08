@@ -29,6 +29,10 @@ ADAPTER_DIR="${ADAPTER_DIR:-$WORK_DIR/adapter}"
 OUT_DIR="${OUT_DIR:-$WORK_DIR/merged}"
 OFFLOAD_DIR="${OFFLOAD_DIR:-$WORK_DIR/offload}"
 
+# Export so inline Python scripts see them via os.environ
+export BASE_DIR ADAPTER_DIR OUT_DIR OFFLOAD_DIR
+export BASE_ID MERGED_ID
+
 mkdir -p "$WORK_DIR" "$OFFLOAD_DIR"
 cd "$WORK_DIR"
 
