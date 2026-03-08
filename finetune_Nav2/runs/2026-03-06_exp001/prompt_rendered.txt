@@ -1,0 +1,1 @@
+Attends 0.5 spuis attends 1.0 spuis tourne de 90° (1.57 rad).

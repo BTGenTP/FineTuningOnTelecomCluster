@@ -1,0 +1,1 @@
+Navigue vers le goal (nav2), puis tourne de 45° (0.785 rad).

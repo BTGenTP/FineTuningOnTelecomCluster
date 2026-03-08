@@ -1,0 +1,1 @@
+[{"skill":"NavigateToGoalWithReplanningAndRecovery","params":{},"comment":"Naviguer vers le goal"},{"skill":"Spin","params":{"spin_dist":3.14}}]

@@ -1,0 +1,16 @@
+validator/__pycache__/*
+train/__pycache__/*
+__pycache__/*
+dataset/__pycache__/*
+eval/__pycache__/*
+slurm/__pycache__/*
+train/__pycache__/*
+train/__pycache__/model_registry.cpython-310.pyc
+train/__pycache__/prompting.cpython-310.pyc
+validator/__pycache__/
+train/__pycache__/
+
+outputs/*
+logs/*
+
+!catalog/bt_nodes_catalog.json

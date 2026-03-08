@@ -1,0 +1,1 @@
+[{"skill":"NavigateToGoalWithReplanningAndRecovery","params":{},"comment":"Navigation"},{"skill":"ClearEntireCostmapLocal","params":{"service_name":"local_costmap/clear_entirely_local_costmap"},"comment":"Effacer la costmap locale"},{"skill":"Wait","params":{"wait_duration":0.5},"comment":"Stabilisation"}]

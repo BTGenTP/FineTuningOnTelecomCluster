@@ -1,0 +1,1 @@
+Avance de 2.0 m à 0.15 m/s (limite 6.0 s)puis recule de 0.5 m à 0.05 m/spuis avance de 1.0 m à 0.15 m/s (limite 6.0 s).

@@ -1,0 +1,1 @@
+[{"skill":"Wait","params":{"wait_duration":0.5}},{"skill":"Wait","params":{"wait_duration":1.0}},{"skill":"Spin","params":{"spin_dist":1.57}}]

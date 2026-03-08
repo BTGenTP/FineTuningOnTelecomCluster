@@ -1,0 +1,1 @@
+Navigue vers le goal (nav2), puis tourne de 360° (6.283 rad), puis attends 0.5 s.
