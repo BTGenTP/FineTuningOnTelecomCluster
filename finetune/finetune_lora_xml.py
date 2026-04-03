@@ -3,8 +3,10 @@ Fine-tuning QLoRA pour NAV4RAIL — Mission NL → BehaviorTree XML
 =================================================================
 Modèle  : Mistral-7B-Instruct-v0.2 (ou TinyLlama-1.1B-Chat pour baseline)
 Méthode : QLoRA (4-bit quantization + LoRA adapters)
-GPU     : Tesla P100-PCIE-16GB (cluster Telecom Paris)
-Dataset : dataset_nav4rail_v4.jsonl — 2000 paires (mission, XML) — 27 skills réels
+GPU     : RTX 3090 24GB (cluster Telecom Paris)
+Dataset : dataset_nav4rail_v5.jsonl — 2000 paires (mission, XML) — 27 skills réels
+          Format multi-subtree fidèle à behavior_tree_example.xml :
+          Action/Condition/SubTreePlus, ReactiveFallback, Repeat, ports blackboard
 
 Usage :
     python finetune_lora_xml.py --model mistral              # Mistral-7B (recommandé)
@@ -29,9 +31,16 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
-    TrainingArguments,
 )
-from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
+
+# TRL 1.0+ : SFTConfig remplace TrainingArguments + DataCollatorForCompletionOnlyLM
+try:
+    from trl import SFTTrainer, SFTConfig
+    TRL_V1 = True
+except ImportError:
+    from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
+    from transformers import TrainingArguments
+    TRL_V1 = False
 
 from validate_bt import validate_bt   # Validateur multi-niveaux (L1 + L2 + L3)
 
@@ -44,26 +53,28 @@ MODELS = {
                          "gate_proj", "up_proj", "down_proj"],
         "lora_r": 16,
         "lora_alpha": 32,
-        "max_seq_len": 1536,
-        "batch_size": 4,
-        "grad_accum": 16,
-        "epochs": 15,
-        "lr": 2e-4,
+        "max_seq_len": 5120,           # v5: multi-subtree XML ~4600 tokens max
+        "batch_size": 1,               # v5: batch=1 pour tenir en VRAM RTX 3090
+        "grad_accum": 64,              # v5: effective batch = 64
+        "epochs": 6,
+        "lr": 5e-5,
+        "gradient_checkpointing": True, # v5: économie mémoire critique
     },
     "tinyllama": {
         "hf_id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
         "lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj"],
         "lora_r": 8,
         "lora_alpha": 16,
-        "max_seq_len": 1536,
-        "batch_size": 4,
-        "grad_accum": 4,
+        "max_seq_len": 5120,           # v5: multi-subtree XML
+        "batch_size": 1,               # v5: batch=1
+        "grad_accum": 16,              # v5: effective batch = 16
         "epochs": 15,
         "lr": 3e-4,
+        "gradient_checkpointing": True,
     },
 }
 
-DATASET_PATH = Path(__file__).parent / "dataset_nav4rail_v4.jsonl"
+DATASET_PATH = Path(__file__).parent / "dataset_nav4rail_v5.jsonl"
 OUTPUT_DIR   = Path(__file__).parent / "outputs"
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -163,46 +174,85 @@ def train(model_key: str, epochs_override: int | None = None, output_dir_overrid
     output_path.mkdir(parents=True, exist_ok=True)
 
     # Réponse-only loss : on entraîne seulement sur la partie [/INST]...
-    # Le collateur ignore les tokens de l'instruction.
-    response_template = "[/INST]"
-    collator = DataCollatorForCompletionOnlyLM(
-        response_template=response_template,
-        tokenizer=tokenizer,
-    )
+    epochs = epochs_override if epochs_override else cfg["epochs"]
+    gc_enabled = cfg.get("gradient_checkpointing", False)
 
-    training_args = TrainingArguments(
-        output_dir=str(output_path),
-        num_train_epochs=epochs_override if epochs_override else cfg["epochs"],
-        per_device_train_batch_size=cfg["batch_size"],
-        per_device_eval_batch_size=cfg["batch_size"],
-        gradient_accumulation_steps=cfg["grad_accum"],
-        learning_rate=cfg["lr"],
-        lr_scheduler_type="cosine",
-        warmup_ratio=0.05,
-        fp16=True,                      # fp16 sur P100 (pas de bf16)
-        bf16=False,
-        logging_steps=5,
-        eval_strategy="epoch",
-        save_strategy="epoch",
-        save_total_limit=2,
-        load_best_model_at_end=True,
-        metric_for_best_model="eval_loss",
-        report_to="none",               # pas de wandb sur le cluster
-        optim="paged_adamw_8bit",       # optimizer 8-bit pour économiser la mémoire
-        dataloader_pin_memory=False,
-    )
-
-    trainer = SFTTrainer(
-        model=model,
-        tokenizer=tokenizer,
-        args=training_args,
-        train_dataset=split["train"],
-        eval_dataset=split["test"],
-        data_collator=collator,
-        dataset_text_field="text",
-        max_seq_length=cfg["max_seq_len"],
-        packing=False,
-    )
+    if TRL_V1:
+        # TRL >= 1.0 : SFTConfig unifié (plus de DataCollatorForCompletionOnlyLM)
+        training_args = SFTConfig(
+            output_dir=str(output_path),
+            num_train_epochs=epochs,
+            per_device_train_batch_size=cfg["batch_size"],
+            per_device_eval_batch_size=cfg["batch_size"],
+            gradient_accumulation_steps=cfg["grad_accum"],
+            gradient_checkpointing=gc_enabled,
+            gradient_checkpointing_kwargs={"use_reentrant": False} if gc_enabled else None,
+            learning_rate=cfg["lr"],
+            lr_scheduler_type="cosine",
+            warmup_ratio=0.10,
+            fp16=False,
+            bf16=True,
+            logging_steps=5,
+            eval_strategy="epoch",
+            save_strategy="epoch",
+            save_total_limit=2,
+            load_best_model_at_end=True,
+            metric_for_best_model="eval_loss",
+            report_to="none",
+            optim="paged_adamw_8bit",
+            dataloader_pin_memory=False,
+            # SFTConfig-specific
+            dataset_text_field="text",
+            max_length=cfg["max_seq_len"],
+            packing=False,
+        )
+        trainer = SFTTrainer(
+            model=model,
+            processing_class=tokenizer,
+            args=training_args,
+            train_dataset=split["train"],
+            eval_dataset=split["test"],
+        )
+    else:
+        # TRL < 1.0 : TrainingArguments + DataCollatorForCompletionOnlyLM
+        collator = DataCollatorForCompletionOnlyLM(
+            response_template="[/INST]",
+            tokenizer=tokenizer,
+        )
+        training_args = TrainingArguments(
+            output_dir=str(output_path),
+            num_train_epochs=epochs,
+            per_device_train_batch_size=cfg["batch_size"],
+            per_device_eval_batch_size=cfg["batch_size"],
+            gradient_accumulation_steps=cfg["grad_accum"],
+            gradient_checkpointing=gc_enabled,
+            gradient_checkpointing_kwargs={"use_reentrant": False} if gc_enabled else None,
+            learning_rate=cfg["lr"],
+            lr_scheduler_type="cosine",
+            warmup_ratio=0.10,
+            fp16=False,
+            bf16=True,
+            logging_steps=5,
+            eval_strategy="epoch",
+            save_strategy="epoch",
+            save_total_limit=2,
+            load_best_model_at_end=True,
+            metric_for_best_model="eval_loss",
+            report_to="none",
+            optim="paged_adamw_8bit",
+            dataloader_pin_memory=False,
+        )
+        trainer = SFTTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            args=training_args,
+            train_dataset=split["train"],
+            eval_dataset=split["test"],
+            data_collator=collator,
+            dataset_text_field="text",
+            max_seq_length=cfg["max_seq_len"],
+            packing=False,
+        )
 
     log(f"Début entraînement [{mem_info()}]")
     t0 = time.time()
@@ -234,35 +284,43 @@ PREPARATION :
 - PassAdvancedPath               : Transmet un chemin avancé au module d'exécution
 - PassMission                    : Transmet la mission au module d'exécution
 - GenerateMissionSequence        : Génère la séquence d'actions pour la mission
-- GenerateCorrectiveSubSequence  : Génère une sous-séquence corrective en cas de déviation
-- InsertCorrectiveSubSequence    : Insère la sous-séquence corrective dans la séquence
+- GenerateCorrectiveSubSequence  : Génère une sous-séquence corrective
+- InsertCorrectiveSubSequence    : Insère la sous-séquence corrective
 
 MOTION :
-- MissionTerminated              : Vérifie si la mission est terminée (critère d'arrêt)
-- CheckCurrentStepType           : Vérifie le type de l'étape en cours
+- MissionTerminated              : Vérifie si la mission est terminée
+- CheckCurrentStepType           : Vérifie le type de l'étape (type_to_be_checked: 0=move, 1=decel, 2=reach_stop, 3=pass, 4=reach_stop_no_wait, 10-14=variantes inspection)
 - PassMotionParameters           : Configure les paramètres de mouvement
-- Move                           : Déplace le robot vers la cible
-- UpdateCurrentExecutedStep      : Marque l'étape courante comme exécutée
+- Move                           : Déplace le robot (threshold_type: 1=normal, 3=pass-through)
+- UpdateCurrentExecutedStep      : Marque l'étape comme exécutée
 - Deccelerate                    : Réduit la vitesse du robot
-- MoveAndStop                    : Déplace puis stoppe le robot à la cible
-- SignalAndWaitForOrder           : Émet un signal et attend une autorisation externe
+- MoveAndStop                    : Déplace puis stoppe le robot
+- SignalAndWaitForOrder           : Signal et attente d'autorisation externe
 - IsRobotPoseProjectionActive    : Vérifie si la projection de pose est active
 
 INSPECTION :
-- ManageMeasurements             : Lance et gère l'acquisition des mesures
-- AnalyseMeasurements            : Traite et analyse les données de mesure
-- MeasurementsQualityValidated   : Vérifie si la qualité des mesures est acceptable
-- PassDefectsLocalization        : Transmet la localisation des défauts détectés
-- MeasurementsEnforcedValidated  : Validation stricte de la qualité des mesures
+- ManageMeasurements             : Lance/arrête l'acquisition des mesures
+- AnalyseMeasurements            : Analyse les données de mesure
+- MeasurementsQualityValidated   : Vérifie la qualité des mesures
+- PassDefectsLocalization        : Transmet la localisation des défauts
+- MeasurementsEnforcedValidated  : Validation stricte des mesures
 
 SIMULATION :
-- SimulationStarted              : Vérifie si le mode simulation est actif"""
+- SimulationStarted              : Vérifie si le mode simulation est actif
+
+Format XML BehaviorTree.CPP :
+- Nœuds feuilles : <Action name="NOM" ID="Skill" port="{var}"/>
+                    <Condition name="NOM" ID="Skill" port="{var}"/>
+- Sous-arbres    : <SubTreePlus name="NOM" ID="subtree_id" __autoremap="true"/>
+- Contrôle       : Sequence, Fallback, ReactiveFallback, Repeat
+- Ports blackboard: {variable} pour la communication entre nœuds"""
 
 SYSTEM_PROMPT = (
     "Tu es un expert en robotique ferroviaire NAV4RAIL. "
-    "Génère un Behavior Tree au format XML BehaviorTree.CPP v4 "
+    "Génère un Behavior Tree au format XML BehaviorTree.CPP "
     "correspondant exactement à la mission décrite. "
-    "Utilise uniquement les skills du catalogue fourni. "
+    "Utilise le format multi-subtree avec Action/Condition/SubTreePlus. "
+    "Inclus les ports blackboard sur chaque nœud. "
     "Réponds uniquement avec le XML, sans explication."
 )
 
@@ -284,7 +342,7 @@ def _extract_xml(decoded: str) -> str:
     return raw
 
 
-def generate_xml(model, tokenizer, mission: str, max_new_tokens: int = 800) -> str:
+def generate_xml(model, tokenizer, mission: str, max_new_tokens: int = 2048) -> str:
     """Génération XML libre (décodage glouton standard)."""
     prompt = _build_prompt(mission)
     inputs = tokenizer(prompt, return_tensors="pt").to(DEVICE)
@@ -304,7 +362,7 @@ def generate_xml(model, tokenizer, mission: str, max_new_tokens: int = 800) -> s
 
 
 def generate_xml_constrained(model, tokenizer, mission: str,
-                              max_new_tokens: int = 800) -> str:
+                              max_new_tokens: int = 2048) -> str:
     """
     Génération XML avec décodage contraint (grammaire GBNF via lm-format-enforcer).
 

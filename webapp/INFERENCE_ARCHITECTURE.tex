@@ -1,0 +1,733 @@
+% ============================================================================
+% BTGenerator — Architecture d'inférence
+% Document de référence pour le déploiement et le service d'inférence
+% ============================================================================
+\documentclass[a4paper,11pt]{article}
+
+% --- Encodage et langue ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+
+% --- Mise en page ---
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{parskip}            % Espacement entre paragraphes au lieu d'indentation
+\usepackage{setspace}
+\onehalfspacing
+
+% --- Typographie et polices ---
+\usepackage{lmodern}
+\usepackage{microtype}
+
+% --- Tableaux ---
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{float}
+
+% --- Couleurs et liens ---
+\usepackage[dvipsnames]{xcolor}
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=NavyBlue,
+    citecolor=NavyBlue,
+    urlcolor=NavyBlue,
+    pdftitle={BTGenerator -- Architecture d'inférence},
+    pdfauthor={Benjamin Lepourtois},
+}
+
+% --- Code source ---
+\usepackage{listings}
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!8},
+    keywordstyle=\color{NavyBlue}\bfseries,
+    commentstyle=\color{OliveGreen},
+    stringstyle=\color{BrickRed},
+    showstringspaces=false,
+    tabsize=2,
+    xleftmargin=1em,
+    framexleftmargin=0.5em,
+}
+
+\lstdefinestyle{bash}{
+    language=bash,
+    morekeywords={ssh,sbatch,curl,sudo,nmcli,uvicorn,pip,scp},
+}
+
+\lstdefinestyle{python}{
+    language=Python,
+    morekeywords={self,def,class,return,from,import,None,True,False},
+}
+
+\lstdefinestyle{json}{
+    basicstyle=\ttfamily\small,
+    string=[s]{"}{"},
+    stringstyle=\color{BrickRed},
+    comment=[l]{//},
+    commentstyle=\color{OliveGreen},
+}
+
+% --- Graphiques et diagrammes ---
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, calc, fit, backgrounds}
+
+% --- Listes ---
+\usepackage{enumitem}
+
+% --- En-tête / pied de page ---
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textsc{BTGenerator}}
+\fancyhead[R]{\small Architecture d'inférence}
+\fancyfoot[C]{\thepage}
+
+% --- Commandes personnalisées ---
+\newcommand{\file}[1]{\texttt{#1}}
+\newcommand{\skill}[1]{\texttt{<#1/>}}
+\newcommand{\tech}[1]{\textsl{#1}}
+\newcommand{\apiep}[1]{\texttt{#1}}
+
+% ============================================================================
+\begin{document}
+
+% --- Page de titre ---
+\begin{titlepage}
+\centering
+\vspace*{3cm}
+{\Huge\bfseries BTGenerator\par}
+\vspace{0.5cm}
+{\LARGE Architecture d'inférence\par}
+\vspace{1.5cm}
+{\large\itshape Inférence GPU sur le cluster Télécom Paris\\
+avec fallback CPU sur Raspberry Pi~5\\
+pour la génération de Behavior Trees NAV4RAIL\par}
+\vspace{2cm}
+{\large Benjamin Lepourtois --- Télécom Paris\par}
+\vspace{1cm}
+{\large\today\par}
+\vfill
+{\small Ce document décrit l'architecture de déploiement du service
+d'inférence~: backend GPU primaire sur le cluster SLURM de
+Télécom Paris ($\sim$10\,s par requête), fallback CPU sur Raspberry Pi~5
+($\sim$6\,min), connectivité réseau dual-homing, et décodage contraint
+par grammaire GBNF.}
+\end{titlepage}
+
+% --- Table des matières ---
+\tableofcontents
+\newpage
+
+% ============================================================================
+\section{Introduction}
+% ============================================================================
+
+Le projet \textbf{BTGenerator} génère des \textbf{Behavior Trees} (BT) au
+format XML BehaviorTree.CPP~v4 à partir de descriptions de missions en
+langage naturel. Le modèle sous-jacent est un \textbf{Mistral-7B} fine-tuné
+par LoRA sur un dataset NAV4RAIL de 2\,000~exemples, puis quantifié au
+format \textbf{GGUF Q4\_K\_M} ($\sim$4.1\,Go).
+
+L'inférence repose sur \textbf{llama-cpp-python} et s'exécute sur deux
+backends selon la disponibilité~:
+
+\begin{itemize}
+    \item \textbf{Backend primaire~:} GPU Tesla P100 (16\,Go VRAM) sur le
+    cluster SLURM de Télécom Paris --- $\sim$10--12\,s par génération.
+    \item \textbf{Backend de secours~:} CPU ARM Cortex-A76 sur Raspberry
+    Pi~5 --- $\sim$5--6\,min par génération.
+\end{itemize}
+
+La webapp FastAPI hébergée sur la RPi5 orchestre transparentement le choix
+du backend et expose une interface web unique à l'utilisateur.
+
+% ============================================================================
+\section{Vue d'ensemble de l'architecture}
+\label{sec:overview}
+% ============================================================================
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=1.2cm and 2cm,
+    box/.style={rectangle, draw, rounded corners=3pt, minimum width=2.2cm,
+                minimum height=1cm, align=center, font=\footnotesize},
+    cluster/.style={box, fill=red!8, draw=BrickRed},
+    rpi/.style={box, fill=NavyBlue!8, draw=NavyBlue},
+    lan/.style={box, fill=OliveGreen!8, draw=OliveGreen},
+    arr/.style={-{Stealth[length=5pt]}, thick},
+    darr/.style={-{Stealth[length=5pt]}, thick, dashed},
+]
+    % --- LAN ---
+    \node[lan] (browser) {Navigateur\\(LAN WiFi)};
+
+    % --- RPi5 ---
+    \node[rpi, right=1.5cm of browser] (app) {\file{app.py}\\FastAPI :5000};
+    \node[rpi, below=0.8cm of app] (inf) {\file{inference.py}\\CPU fallback};
+
+    % --- Cluster ---
+    \node[cluster, right=1.5cm of app] (gw) {\texttt{gpu-gw}\\(gateway)};
+    \node[cluster, right=1.2cm of gw] (gpu) {Nœud GPU\\P100 / 3090\\\file{serve.py} :8080};
+
+    % --- Cadres ---
+    \begin{scope}[on background layer]
+        \node[draw=NavyBlue, dashed, rounded corners, inner sep=8pt,
+              fit=(app)(inf), label={[NavyBlue, font=\small]above:Raspberry Pi 5}] {};
+        \node[draw=BrickRed, dashed, rounded corners, inner sep=8pt,
+              fit=(gw)(gpu), label={[BrickRed, font=\small]above:Cluster Télécom Paris}] {};
+    \end{scope}
+
+    % --- Flèches ---
+    \draw[arr] (browser) -- node[above, font=\scriptsize]{HTTP} (app);
+    \draw[arr] (app) -- node[above, font=\scriptsize]{SSH tunnel}
+                        node[below, font=\scriptsize]{VPN / eth0} (gw);
+    \draw[arr] (gw) -- node[above, font=\scriptsize]{Reverse}
+                       node[below, font=\scriptsize]{tunnel} (gpu);
+    \draw[darr] (app) -- node[right, font=\scriptsize]{Fallback} (inf);
+\end{tikzpicture}
+\caption{Architecture d'inférence --- vue d'ensemble.
+         Trait plein~: chemin primaire (GPU, $\sim$10\,s).
+         Trait pointillé~: fallback CPU ($\sim$6\,min).}
+\label{fig:overview}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{Comparaison des deux backends d'inférence}
+\label{tab:backends}
+\begin{tabularx}{\textwidth}{@{}l l l c X@{}}
+\toprule
+\textbf{Backend} & \textbf{Matériel} & \textbf{Temps} & \textbf{Rôle} & \textbf{Conditions} \\
+\midrule
+Cluster Télécom & Tesla P100 16\,Go & $\sim$10--12\,s & Primaire & VPN actif + tunnel SSH + job SLURM \\
+RPi5 locale & ARM Cortex-A76 & $\sim$5--6\,min & Fallback & Modèle GGUF présent localement \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+% ============================================================================
+\section{Composants}
+\label{sec:components}
+% ============================================================================
+
+% ----------------------------------------------------------------------------
+\subsection{Webapp FastAPI (\file{app.py} --- RPi5)}
+\label{sec:webapp}
+% ----------------------------------------------------------------------------
+
+Point d'entrée unique pour l'utilisateur. La webapp est hébergée sur la
+Raspberry Pi~5, accessible via WiFi sur le LAN local (port~5000).
+
+\subsubsection{Logique de sélection du backend}
+
+À chaque requête \apiep{POST /api/generate}, la webapp tente d'abord
+de joindre le cluster~:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=0.8cm and 1.2cm,
+    decision/.style={diamond, draw, aspect=2.5, inner sep=1pt,
+                     align=center, font=\footnotesize},
+    process/.style={rectangle, draw, rounded corners=3pt, minimum width=2.5cm,
+                    align=center, font=\footnotesize},
+    io/.style={rectangle, draw, rounded corners=3pt, minimum width=2.5cm,
+               align=center, font=\footnotesize, fill=gray!10},
+    gpu/.style={process, fill=OliveGreen!15},
+    cpu/.style={process, fill=BrickRed!15},
+    arr/.style={-{Stealth[length=5pt]}, thick},
+]
+    \node[io] (req) {\apiep{POST /api/generate}};
+    \node[decision, below=0.8cm of req] (check)
+        {Cluster accessible~?\\{\scriptsize\apiep{GET localhost:8080/health}}};
+    \node[gpu, below left=1.2cm and 1.2cm of check] (cluster)
+        {\apiep{POST} cluster\\{\scriptsize\texttt{/generate}}};
+    \node[decision, below right=1.2cm and 1.2cm of check] (loaded)
+        {Modèle local\\chargé~?};
+    \node[cpu, right=1.2cm of loaded] (load)
+        {Chargement GGUF\\{\scriptsize$\sim$2\,min, 5.5\,Go}};
+    \node[cpu, below=1.2cm of loaded] (local) {Inférence CPU\\{\scriptsize$\sim$5--6\,min}};
+    \node[gpu, below=0.8cm of cluster] (fast) {Réponse\\{\scriptsize$\sim$10--12\,s}};
+    \node[io, below=4.5cm of check] (resp) {Retour client\\{\scriptsize(xml, score, errors)}};
+
+    \draw[arr] (req) -- (check);
+    \draw[arr] (check) -| node[above left, font=\footnotesize]{oui} (cluster);
+    \draw[arr] (check) -| node[above right, font=\footnotesize]{non} (loaded);
+    \draw[arr] (loaded) -- node[left, font=\footnotesize]{oui} (local);
+    \draw[arr] (loaded) -- node[above, font=\footnotesize]{non} (load);
+    \draw[arr] (load) |- (local);
+    \draw[arr] (cluster) -- (fast);
+    \draw[arr] (fast) |- (resp);
+    \draw[arr] (local) |- (resp);
+\end{tikzpicture}
+\caption{Logique de sélection du backend à chaque requête de génération.}
+\label{fig:backend-selection}
+\end{figure}
+
+\subsubsection{Endpoints de l'API}
+
+\begin{table}[H]
+\centering
+\caption{Endpoints exposés par la webapp}
+\label{tab:endpoints}
+\begin{tabularx}{\textwidth}{@{}l l X@{}}
+\toprule
+\textbf{Route} & \textbf{Méthode} & \textbf{Description} \\
+\midrule
+\apiep{/}              & GET  & Interface web (template Jinja2) \\
+\apiep{/api/status}    & GET  & Backend actif (\texttt{cluster} ou \texttt{local}) + état du modèle \\
+\apiep{/api/generate}  & POST & Génère un BT XML (routing automatique cluster/local) \\
+\apiep{/api/validate}  & POST & Valide un XML BT existant (sans inférence) \\
+\apiep{/api/examples}  & GET  & Liste de missions d'exemple \\
+\apiep{/api/history/stream} & GET & SSE temps réel (statut de génération, historique) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+% ----------------------------------------------------------------------------
+\subsection{Serveur d'inférence GPU (\file{serve.py} --- Cluster)}
+\label{sec:serve}
+% ----------------------------------------------------------------------------
+
+Service FastAPI minimal déployé via un job SLURM sur un nœud GPU du
+cluster de Télécom Paris.
+
+\subsubsection{Pipeline du job SLURM}
+
+Le fichier \file{job\_serve.sh} orchestre le déploiement complet~:
+
+\begin{enumerate}
+    \item \textbf{Chargement des modules}~: CUDA~12.4, GCC~11.5, Python~3.11.
+    \item \textbf{Activation du venv}~: environnement contenant
+    \texttt{llama-cpp-python} compilé avec support CUDA (GPU offload).
+    \item \textbf{Reverse tunnel SSH}~: \texttt{ssh -R 8080:localhost:8080
+    gpu-gw} --- rend le port~8080 du nœud GPU accessible depuis la passerelle.
+    \item \textbf{Lancement du serveur}~: \texttt{uvicorn serve:app} sur le
+    port~8080.
+\end{enumerate}
+
+\subsubsection{Pipeline d'inférence}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=0.6cm,
+    pipestep/.style={rectangle, draw, rounded corners=3pt, minimum width=5cm,
+                 minimum height=0.8cm, align=center, font=\small},
+    arr/.style={-{Stealth[length=5pt]}, thick},
+]
+    \node[pipestep] (prompt)  {Construction du prompt \texttt{[INST]...[/INST]}};
+    \node[pipestep, below=of prompt] (grammar) {Création d'un objet \texttt{LlamaGrammar} \textbf{frais}};
+    \node[pipestep, below=of grammar] (llm) {\texttt{llm()} avec grammaire GBNF + GPU offload};
+    \node[pipestep, below=of llm] (extract) {\texttt{extract\_xml()} --- extraction \texttt{<root>...</root>}};
+    \node[pipestep, below=of extract] (validate) {\texttt{validate\_bt()} --- L1 / L2 / L3};
+    \node[pipestep, below=of validate, fill=gray!10] (resp) {Réponse JSON \{xml, score, errors, \ldots\}};
+
+    \draw[arr] (prompt) -- (grammar);
+    \draw[arr] (grammar) -- (llm);
+    \draw[arr] (llm) -- (extract);
+    \draw[arr] (extract) -- (validate);
+    \draw[arr] (validate) -- (resp);
+\end{tikzpicture}
+\caption{Pipeline d'inférence de \file{serve.py} sur le nœud GPU.}
+\label{fig:serve-pipeline}
+\end{figure}
+
+\subsubsection{Bug critique --- Grammaire GBNF avec llama-cpp-python v0.3.x}
+
+Avec \texttt{llama-cpp-python}~$\geq$~0.3.0, l'objet \texttt{LlamaGrammar}
+encapsule un \texttt{llama\_sampler} dont l'état interne n'est \textbf{pas
+réinitialisé} entre les appels. Réutiliser le même objet provoque une
+\textbf{ignorance silencieuse} de la grammaire --- le modèle génère alors
+des noms de skills hallucinés (ex.~: <<~PassMisson~>> au lieu de
+<<~PassMission~>>).
+
+\textbf{Correction~:} créer un objet \texttt{LlamaGrammar} frais par
+requête~:
+
+\begin{lstlisting}[style=python, caption={Correction du bug grammar v0.3.x}]
+# Correct (v0.3.x) : objet frais par requete
+def _make_grammar():
+    return LlamaGrammar.from_string(GRAMMAR_STR)
+
+output = llm(prompt, grammar=_make_grammar())
+\end{lstlisting}
+
+\begin{lstlisting}[style=python, caption={Bug silencieux --- ne pas faire}]
+# Bug : grammaire ignoree apres le premier appel
+grammar = LlamaGrammar.from_string(GRAMMAR_STR)
+output = llm(prompt, grammar=grammar)  # Ignore silencieusement
+\end{lstlisting}
+
+Le serveur inclut un \textbf{self-test au démarrage}~: il génère un court
+BT avec grammaire et vérifie que tous les tags produits appartiennent à la
+whitelist des 27~skills.
+
+% ----------------------------------------------------------------------------
+\subsection{Moteur d'inférence local (\file{inference.py} --- RPi5)}
+\label{sec:local}
+% ----------------------------------------------------------------------------
+
+Classe \texttt{Nav4RailGenerator} chargeant le modèle GGUF directement en
+mémoire CPU sur la RPi5. Activé uniquement si le cluster est inaccessible.
+
+\begin{table}[H]
+\centering
+\caption{Caractéristiques de l'inférence locale (RPi5)}
+\label{tab:local-specs}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\toprule
+\textbf{Paramètre} & \textbf{Valeur} \\
+\midrule
+Modèle         & \file{nav4rail-mistral-7b-q4\_k\_m.gguf} ($\sim$4.1\,Go, Q4\_K\_M) \\
+Contexte       & 2\,048 tokens \\
+Threads        & Auto-détecté (4~cœurs ARM Cortex-A76) \\
+RAM utilisée   & $\sim$5.5\,Go \\
+Chargement     & $\sim$2\,min \\
+Inférence      & $\sim$5--6\,min par mission \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+% ============================================================================
+\section{Réseau et connectivité}
+\label{sec:network}
+% ============================================================================
+
+% ----------------------------------------------------------------------------
+\subsection{Dual-homing de la Raspberry Pi~5}
+\label{sec:dualhoming}
+% ----------------------------------------------------------------------------
+
+La RPi5 utilise deux interfaces réseau pour séparer le trafic~:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=0.8cm and 1.5cm,
+    box/.style={rectangle, draw, rounded corners=3pt, minimum width=2cm,
+                minimum height=0.8cm, align=center, font=\footnotesize},
+    iface/.style={box, fill=NavyBlue!10, draw=NavyBlue},
+    ext/.style={box, fill=gray!10, draw=gray!50},
+    arr/.style={-{Stealth[length=5pt]}, thick},
+    darr/.style={{Stealth[length=5pt]}-{Stealth[length=5pt]}, thick},
+]
+    % RPi5
+    \node[box, fill=NavyBlue!5] (app) {\file{app.py} :5000};
+    \node[iface, below left=1cm and 0.5cm of app] (wlan) {\texttt{wlan0}\\WiFi};
+    \node[iface, below right=1cm and 0.5cm of app] (eth) {\texttt{eth0}\\Ethernet};
+    \node[iface, below=0.8cm of eth] (tun) {\texttt{tun0}\\VPN};
+
+    % Externes
+    \node[ext, left=2cm of wlan] (pc) {Navigateur\\192.168.x.x};
+    \node[ext, right=2cm of tun] (gw) {\texttt{gpu-gw}\\137.194.132.200};
+
+    % Cadre RPi5
+    \begin{scope}[on background layer]
+        \node[draw=NavyBlue, dashed, rounded corners, inner sep=10pt,
+              fit=(app)(wlan)(eth)(tun),
+              label={[NavyBlue, font=\small]above:Raspberry Pi 5}] {};
+    \end{scope}
+
+    % Flèches
+    \draw[darr] (pc) -- node[above, font=\scriptsize]{HTTP} (wlan);
+    \draw[arr] (wlan) -- (app);
+    \draw[arr] (eth) -- (tun);
+    \draw[darr] (tun) -- node[above, font=\scriptsize]{OpenVPN} (gw);
+    \draw[darr, dashed] (app) to[bend right=30]
+        node[left, font=\scriptsize, xshift=-3pt]{SSH :8080} (tun);
+\end{tikzpicture}
+\caption{Dual-homing~: WiFi pour la webapp, Ethernet + VPN pour le cluster.}
+\label{fig:dualhoming}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{Répartition des interfaces réseau}
+\label{tab:interfaces}
+\begin{tabularx}{\textwidth}{@{}l l X@{}}
+\toprule
+\textbf{Interface} & \textbf{Réseau} & \textbf{Usage} \\
+\midrule
+\texttt{wlan0} (WiFi)     & LAN local (192.168.x.x) & Servir la webapp aux navigateurs \\
+\texttt{eth0} (Ethernet)  & VPN Télécom Paris (\texttt{tun0}) & Accéder au cluster via \texttt{gpu-gw} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Configuration VPN essentielle~: \texttt{ipv4.never-default yes} empêche
+le VPN d'écraser la route par défaut (WiFi). La route vers le réseau
+Télécom est ajoutée manuellement~:
+
+\begin{lstlisting}[style=bash]
+sudo nmcli connection up telecom-paris
+sudo ip route add 137.194.0.0/16 dev tun0
+\end{lstlisting}
+
+\textbf{Attention~:} cette route est éphémère et perdue au redémarrage du
+VPN. Elle peut être automatisée via un script NetworkManager dispatcher
+dans \file{/etc/NetworkManager/dispatcher.d/}.
+
+% ----------------------------------------------------------------------------
+\subsection{Chaîne de tunnels SSH}
+\label{sec:tunnels}
+% ----------------------------------------------------------------------------
+
+Le cluster Télécom Paris n'expose pas de ports publics. Les nœuds GPU ne
+sont pas accessibles directement en SSH depuis l'extérieur
+(\texttt{pam\_slurm\_adopt} bloque les connexions entrantes). L'accès
+repose sur un \textbf{double tunnel SSH}~:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=1.5cm and 3cm,
+    box/.style={rectangle, draw, rounded corners=3pt, minimum width=2.5cm,
+                minimum height=1.2cm, align=center, font=\small},
+    arr/.style={-{Stealth[length=6pt]}, thick},
+    tunnel/.style={arr, NavyBlue},
+    data/.style={arr, OliveGreen, dashed},
+]
+    \node[box] (rpi) {RPi5\\{\footnotesize localhost:8080}};
+    \node[box, right=3.5cm of rpi] (gw) {\texttt{gpu-gw}\\{\footnotesize :8080}};
+    \node[box, right=3.5cm of gw] (node) {Nœud GPU\\{\footnotesize serve.py :8080}};
+
+    % Tunnels
+    \draw[tunnel] (rpi) -- node[above, font=\footnotesize]
+        {\texttt{ssh -L 8080:localhost:8080}} (gw);
+    \draw[tunnel] (node) -- node[above, font=\footnotesize]
+        {\texttt{ssh -R 8080:localhost:8080}} (gw);
+
+    % Labels
+    \node[below=0.3cm of rpi, font=\footnotesize\itshape, NavyBlue]
+        {Forward tunnel};
+    \node[below=0.3cm of node, font=\footnotesize\itshape, NavyBlue]
+        {Reverse tunnel};
+
+    % Flux de données
+    \draw[data, bend left=25] (rpi) to
+        node[below, font=\footnotesize, yshift=-5pt]
+        {\texttt{curl localhost:8080/generate} $\longrightarrow$ GPU}
+        (node);
+\end{tikzpicture}
+\caption{Double tunnel SSH~: le flux de données traverse
+         \texttt{gpu-gw} de manière transparente.}
+\label{fig:tunnels}
+\end{figure}
+
+\begin{enumerate}
+    \item \textbf{Reverse tunnel (depuis le job SLURM)~:} le nœud GPU ouvre
+    un tunnel vers \texttt{gpu-gw} au démarrage du job (\texttt{ssh~-R}).
+    C'est le seul sens possible car les connexions entrantes sont bloquées
+    par \texttt{pam\_slurm\_adopt}.
+
+    \item \textbf{Forward tunnel (depuis la RPi5)~:} la RPi5 mappe son
+    \texttt{localhost:8080} vers le port~8080 de \texttt{gpu-gw}
+    (\texttt{ssh~-L}), qui est relié au nœud GPU par le reverse tunnel.
+\end{enumerate}
+
+\textbf{Résultat~:} \texttt{curl http://localhost:8080/generate} sur la
+RPi5 atteint directement le GPU du cluster.
+
+% ============================================================================
+\section{Modèle et décodage contraint}
+\label{sec:model}
+% ============================================================================
+
+% ----------------------------------------------------------------------------
+\subsection{Modèle}
+% ----------------------------------------------------------------------------
+
+\begin{table}[H]
+\centering
+\caption{Caractéristiques du modèle d'inférence}
+\label{tab:model}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\toprule
+\textbf{Propriété} & \textbf{Valeur} \\
+\midrule
+Base         & Mistral-7B-Instruct-v0.2 \\
+Fine-tuning  & LoRA ($r=16$, $\alpha=32$) sur dataset NAV4RAIL (2\,000 exemples) \\
+Format       & GGUF Q4\_K\_M ($\sim$4.1\,Go, 4.83~BPW) \\
+Backend      & llama-cpp-python (CPU sur RPi5, CUDA sur cluster) \\
+Contexte     & 2\,048 tokens \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+% ----------------------------------------------------------------------------
+\subsection{Grammaire GBNF}
+\label{sec:gbnf}
+% ----------------------------------------------------------------------------
+
+La grammaire GBNF (\file{nav4rail\_grammar.py}) contraint le décodage
+\textbf{token par token}. À chaque étape de génération, seuls les tokens
+compatibles avec la grammaire sont autorisés. Elle garantit~:
+
+\begin{itemize}
+    \item \textbf{Structure XML valide~:} enveloppe
+    \texttt{<root BTCPP\_format="4">} contenant un \texttt{<Behavior\-Tree ID="MainTree">}.
+    \item \textbf{Nœuds de contrôle~:} uniquement \texttt{Sequence} et
+    \texttt{Fallback}, avec imbrication libre.
+    \item \textbf{Nœuds feuilles~:} uniquement les \textbf{27~skills
+    NAV4RAIL} (4~familles~: Preparation, Motion, Inspection, Simulation).
+    \item \textbf{Attributs~:} \texttt{name} en \texttt{snake\_case}.
+    \item \textbf{Zéro hallucination} de nom de skill.
+\end{itemize}
+
+Extrait de la grammaire~:
+
+\begin{lstlisting}[caption={Règle GBNF des skills autorisés (extrait)}]
+skilltag ::= "LoadMission" | "MissionStructureValid"
+           | "UpdateCurrentGeneratedActivity"
+           | "ProjectPointOnNetwork" | "CreatePath"
+           | "AgregatePath" | ... | "SimulationStarted"
+\end{lstlisting}
+
+% ----------------------------------------------------------------------------
+\subsection{Validation multi-niveaux (\file{validate\_bt.py})}
+\label{sec:validation}
+% ----------------------------------------------------------------------------
+
+Appliquée systématiquement après chaque génération, quel que soit le
+backend~:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=0.6cm and 1cm,
+    level/.style={rectangle, draw, rounded corners=3pt, minimum width=3.2cm,
+                  minimum height=1.3cm, align=center, font=\footnotesize},
+    result/.style={rectangle, draw, rounded corners=3pt, minimum width=1.8cm,
+                   minimum height=0.7cm, align=center, font=\footnotesize\bfseries},
+    arr/.style={-{Stealth[length=5pt]}, thick},
+]
+    \node[level, fill=NavyBlue!10] (l1)
+        {\textbf{L1 --- Syntaxique}\\XML bien formé\\Tags autorisés, format v4};
+    \node[level, fill=OliveGreen!10, right=1.5cm of l1] (l2)
+        {\textbf{L2 --- Structurel}\\Nœuds non vides\\Fallback $\geq$ 2 branches\\Profondeur $\leq$ 10};
+    \node[level, fill=Goldenrod!15, right=1.5cm of l2] (l3)
+        {\textbf{L3 --- Sémantique}\\Ordre des skills\\Patterns métier};
+
+    \node[result, fill=OliveGreen!20, below right=1.2cm and -0.5cm of l3] (ok)
+        {Score = 1.0};
+    \node[result, fill=BrickRed!20, below=2cm of l1] (ko) {Score = 0.0};
+
+    \draw[arr] (l1) -- node[above, font=\footnotesize]{OK} (l2);
+    \draw[arr] (l2) -- node[above, font=\footnotesize]{OK} (l3);
+    \draw[arr] (l3) -- node[right, font=\footnotesize]{OK} (ok);
+    \draw[arr, BrickRed] (l1) -- node[left, font=\footnotesize]{Erreur} (ko);
+    \draw[arr, BrickRed] (l2) |- (ko);
+    \draw[arr, BrickRed] (l3) |- node[above, font=\footnotesize, near start]{Erreur} (ko);
+\end{tikzpicture}
+\caption{Pipeline de validation à trois niveaux. Pénalité de $-0.1$ par
+         warning sémantique.}
+\label{fig:validation}
+\end{figure}
+
+% ============================================================================
+\section{Contrat API du service d'inférence}
+\label{sec:api-contract}
+% ============================================================================
+
+Le service GPU (\file{serve.py}) et le moteur local (\file{inference.py})
+partagent le même format de réponse, permettant au frontend de traiter les
+deux backends de manière transparente~:
+
+\begin{lstlisting}[style=json, caption={Format de réponse commun aux deux backends}]
+{
+  "xml": "<root BTCPP_format=\"4\">...</root>",
+  "valid": true,
+  "score": 1.0,
+  "errors": [],
+  "warnings": [],
+  "summary": "OK (score=1.0) -- L1+L2+L3 passes",
+  "generation_time_s": 11.5
+}
+\end{lstlisting}
+
+% ============================================================================
+\section{Déploiement}
+\label{sec:deployment}
+% ============================================================================
+
+\subsection{Lancer le service GPU sur le cluster}
+
+\begin{lstlisting}[style=bash, caption={Soumission du job SLURM depuis la RPi5}]
+# Depuis la RPi5 (VPN actif)
+ssh gpu
+cd ~/nav4rail_serve
+sbatch job_serve.sh
+
+# Surveiller le demarrage
+tail -f nav4rail_serve_<jobid>.out
+# Attendre : "[serve] Grammar self-test PASSED"
+\end{lstlisting}
+
+\subsection{Ouvrir le tunnel depuis la RPi5}
+
+\begin{lstlisting}[style=bash]
+ssh -fN -L 8080:localhost:8080 gpu
+\end{lstlisting}
+
+\subsection{Lancer la webapp}
+
+\begin{lstlisting}[style=bash]
+cd ~/nav4rail_webapp
+source .venv/bin/activate
+uvicorn app:app --host 0.0.0.0 --port 5000
+\end{lstlisting}
+
+\subsection{Vérification end-to-end}
+
+\begin{lstlisting}[style=bash, caption={Tests de bout en bout}]
+# Health du cluster
+curl -s localhost:8080/health
+# -> {"status":"ok","gpu":true,"model":"nav4rail-mistral-7b-q4_k_m.gguf"}
+
+# Inference via la webapp
+curl -s -X POST localhost:5000/api/generate \
+  -H 'Content-Type: application/json' \
+  -d '{"mission":"Navigue au km 42 depuis le km 10"}'
+# -> {"xml":"<root ...>...</root>","score":1.0,"generation_time_s":11.5}
+\end{lstlisting}
+
+% ============================================================================
+\section{Limitations et points d'attention}
+\label{sec:limitations}
+% ============================================================================
+
+\begin{table}[H]
+\centering
+\caption{Limitations connues et mitigations}
+\label{tab:limitations}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\toprule
+\textbf{Sujet} & \textbf{Détail} \\
+\midrule
+Job SLURM temporaire &
+    Le service GPU est un job de 2\,h max. Il faut le relancer
+    périodiquement via \texttt{sbatch}. \\
+Route VPN éphémère &
+    \texttt{ip route add 137.194.0.0/16 dev tun0} est perdu au
+    redémarrage du VPN. Automatiser via un dispatcher NetworkManager. \\
+Tunnel SSH fragile &
+    Si le tunnel tombe, la webapp bascule silencieusement sur le CPU
+    local ($\sim$6\,min par requête). \\
+Modèle GGUF unique &
+    Le même fichier \texttt{.gguf} doit être présent sur le cluster ET
+    la RPi5 pour des résultats cohérents. \\
+Grammar v0.3.x &
+    Créer un objet \texttt{LlamaGrammar} frais par requête (cf.\
+    section~\ref{sec:serve}). \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\end{document}
