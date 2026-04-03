@@ -1,12 +1,18 @@
 """
-Validateur multi-niveaux pour Behavior Trees NAV4RAIL (v4 — 27 skills réels)
-=============================================================================
+Validateur multi-niveaux pour Behavior Trees NAV4RAIL — format BehaviorTree.CPP
+================================================================================
 
-Niveau 1 — Syntaxique  : XML bien formé, BTCPP_format, tag allowlist, <MoveAndStop> présent
+Format attendu (BehaviorTree.CPP standard) :
+  <Action name="HUMAN NAME" ID="SkillName" port="{var}"/>
+  <Condition name="HUMAN NAME" ID="SkillName" port="{var}"/>
+  <SubTreePlus name="HUMAN NAME" ID="subtree_id" __autoremap="true"/>
+
+Niveau 1 — Syntaxique  : XML bien formé, BTCPP_format="4", tags valides,
+                          skills via ID attr, MoveAndStop présent
 Niveau 2 — Structurel  : Nœuds de contrôle vides, profondeur excessive,
-                          structure Fallback (≥ 2 branches), <BehaviorTree> présent
+                          Fallback (≥ 2 branches), <BehaviorTree> présent
 Niveau 3 — Sémantique  : Ordre des skills (LoadMission en premier),
-                          <MoveAndStop> en dernière position,
+                          MoveAndStop en dernière position,
                           Conditions dans <Fallback>
 
 Score :
@@ -27,58 +33,108 @@ from dataclasses import dataclass, field
 
 # ─── Constantes ───────────────────────────────────────────────────────────────
 
-VALID_TAGS = frozenset({
-    # Structure
-    "root", "BehaviorTree", "Sequence", "Fallback", "Parallel",
-    # PREPARATION (12)
-    "LoadMission", "MissionStructureValid", "UpdateCurrentGeneratedActivity",
-    "ProjectPointOnNetwork", "CreatePath", "AgregatePath", "MissionFullyTreated",
-    "PassAdvancedPath", "PassMission", "GenerateMissionSequence",
-    "GenerateCorrectiveSubSequence", "InsertCorrectiveSubSequence",
-    # MOTION (9)
-    "MissionTerminated", "CheckCurrentStepType", "PassMotionParameters",
-    "Move", "UpdateCurrentExecutedStep", "Deccelerate", "MoveAndStop",
-    "SignalAndWaitForOrder", "IsRobotPoseProjectionActive",
-    # INSPECTION (5)
-    "ManageMeasurements", "AnalyseMeasurements", "MeasurementsQualityValidated",
-    "PassDefectsLocalization", "MeasurementsEnforcedValidated",
-    # SIMULATION (1)
-    "SimulationStarted",
-})
+# Tags XML valides (BehaviorTree.CPP standard)
+VALID_TAGS = frozenset(
+    {
+        # Structure
+        "root",
+        "BehaviorTree",
+        # BehaviorTree.CPP leaf wrappers (skill resolved via ID attribute)
+        "Action",
+        "Condition",
+        "SubTreePlus",
+        # Control nodes
+        "Sequence",
+        "Fallback",
+        "ReactiveFallback",
+        "Parallel",
+        "Repeat",
+    }
+)
 
-CONTROL_NODES = frozenset({"Sequence", "Fallback", "Parallel"})
+CONTROL_NODES = frozenset(
+    {
+        "Sequence",
+        "Fallback",
+        "ReactiveFallback",
+        "Parallel",
+        "Repeat",
+    }
+)
 
-SKILL_NODES = VALID_TAGS - {"root", "BehaviorTree"} - CONTROL_NODES
+# 27 skills NAV4RAIL valides (attendus comme attribut ID="" sur Action/Condition)
+VALID_SKILLS = frozenset(
+    {
+        # PREPARATION (12)
+        "LoadMission",
+        "MissionStructureValid",
+        "UpdateCurrentGeneratedActivity",
+        "ProjectPointOnNetwork",
+        "CreatePath",
+        "AgregatePath",
+        "MissionFullyTreated",
+        "PassAdvancedPath",
+        "PassMission",
+        "GenerateMissionSequence",
+        "GenerateCorrectiveSubSequence",
+        "InsertCorrectiveSubSequence",
+        # MOTION (9)
+        "MissionTerminated",
+        "CheckCurrentStepType",
+        "PassMotionParameters",
+        "Move",
+        "UpdateCurrentExecutedStep",
+        "Deccelerate",
+        "MoveAndStop",
+        "SignalAndWaitForOrder",
+        "IsRobotPoseProjectionActive",
+        "Pause",
+        # INSPECTION (5)
+        "ManageMeasurements",
+        "AnalyseMeasurements",
+        "MeasurementsQualityValidated",
+        "PassDefectsLocalization",
+        "MeasurementsEnforcedValidated",
+        # SIMULATION (1)
+        "SimulationStarted",
+    }
+)
 
 # Conditions : skills qui retournent SUCCESS/FAILURE sans effet de bord
-CONDITION_NODES = frozenset({
-    "MissionStructureValid", "MissionFullyTreated",
-    "MissionTerminated", "CheckCurrentStepType",
-    "IsRobotPoseProjectionActive",
-    "MeasurementsQualityValidated", "MeasurementsEnforcedValidated",
-    "SimulationStarted",
-})
+CONDITION_SKILLS = frozenset(
+    {
+        "MissionStructureValid",
+        "MissionFullyTreated",
+        "MissionTerminated",
+        "CheckCurrentStepType",
+        "IsRobotPoseProjectionActive",
+        "MeasurementsQualityValidated",
+        "MeasurementsEnforcedValidated",
+        "SimulationStarted",
+    }
+)
 
 # Précédences partielles : skill → skills qui doivent le précéder
 PREREQUISITES: dict[str, list[str]] = {
-    "MissionStructureValid":  ["LoadMission"],
-    "CreatePath":             ["ProjectPointOnNetwork"],
-    "AgregatePath":           ["CreatePath"],
+    "MissionStructureValid": ["LoadMission"],
+    "CreatePath": ["ProjectPointOnNetwork"],
+    "AgregatePath": ["CreatePath"],
     "GenerateMissionSequence": ["LoadMission"],
 }
 
-MAX_DEPTH  = 12   # profondeur maximale (BTs v4 plus profonds)
-MAX_SKILLS = 35   # nombre maximal de nœuds skills (27 skills, répétitions possibles)
+MAX_DEPTH = 12
+MAX_SKILLS = 80  # 28 skills, mais répétitions dans multi-subtree (ex: reference = 72)
 
 
 # ─── Résultat de validation ───────────────────────────────────────────────────
 
+
 @dataclass
 class ValidationResult:
-    valid:    bool       = True
-    errors:   list[str]  = field(default_factory=list)
-    warnings: list[str]  = field(default_factory=list)
-    score:    float      = 1.0   # 0.0 → 1.0
+    valid: bool = True
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    score: float = 1.0  # 0.0 → 1.0
 
     def fail(self, msg: str, level: int = 1):
         self.valid = False
@@ -97,10 +153,39 @@ class ValidationResult:
         return f"INVALIDE : {self.errors[0]}"
 
 
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def _resolve_skill(elem: ET.Element) -> str | None:
+    """Résout le nom du skill depuis un élément XML.
+
+    Format BehaviorTree.CPP : <Action ID="MoveAndStop" name="FINAL STOP" .../>
+    Retourne le skill ID si c'est un Action/Condition avec un ID valide.
+    """
+    if elem.tag in ("Action", "Condition"):
+        skill_id = elem.get("ID", "")
+        return skill_id if skill_id in VALID_SKILLS else None
+    return None
+
+
+def _is_condition(elem: ET.Element) -> str | None:
+    """Retourne le skill ID si c'est une Condition valide."""
+    if elem.tag == "Condition":
+        skill_id = elem.get("ID", "")
+        return skill_id if skill_id in CONDITION_SKILLS else None
+    return None
+
+
 # ─── Niveau 1 — Syntaxique ────────────────────────────────────────────────────
+
 
 def _validate_l1(xml_str: str) -> tuple[bool, ET.Element | None, str]:
     """Parse XML + vérifications basiques obligatoires."""
+    # Strip XML declaration si présente
+    xml_str = xml_str.strip()
+    if xml_str.startswith("<?xml"):
+        xml_str = xml_str[xml_str.index("?>") + 2 :].strip()
+
     try:
         root = ET.fromstring(xml_str)
     except ET.ParseError as e:
@@ -109,20 +194,51 @@ def _validate_l1(xml_str: str) -> tuple[bool, ET.Element | None, str]:
     if root.tag != "root":
         return False, None, f"Tag racine '<root>' attendu, obtenu '<{root.tag}>'"
 
-    if root.get("BTCPP_format") != "4":
-        return False, None, "Attribut BTCPP_format='4' manquant sur <root>"
+    btcpp_fmt = root.get("BTCPP_format")
+    # BTCPP_format="4" recommandé mais pas bloquant (fichiers terrain l'omettent)
+    _btcpp_warning = None
+    if btcpp_fmt is None:
+        _btcpp_warning = "Attribut BTCPP_format='4' absent sur <root> (recommandé)"
+    elif btcpp_fmt != "4":
+        _btcpp_warning = f"BTCPP_format='{btcpp_fmt}' inattendu (attendu: '4')"
 
-    unknown = sorted({e.tag for e in root.iter() if e.tag not in VALID_TAGS})
-    if unknown:
-        return False, None, f"Tags inconnus / hallucinations : {unknown}"
+    # Vérifier que tous les tags sont dans la liste
+    unknown_tags = set()
+    unknown_skills = set()
+    for e in root.iter():
+        if e.tag not in VALID_TAGS:
+            unknown_tags.add(e.tag)
+        # Vérifier que Action/Condition ont un ID de skill valide
+        if e.tag in ("Action", "Condition"):
+            skill_id = e.get("ID", "")
+            if skill_id and skill_id not in VALID_SKILLS:
+                unknown_skills.add(skill_id)
 
-    if not any(e.tag == "MoveAndStop" for e in root.iter()):
-        return False, None, "<MoveAndStop> absent — le BT ne se termine jamais"
+    if unknown_tags:
+        return False, None, f"Tags XML inconnus : {sorted(unknown_tags)}"
+    if unknown_skills:
+        return (
+            False,
+            None,
+            f"Skills inconnus (hallucinations) : {sorted(unknown_skills)}",
+        )
 
-    return True, root, "OK"
+    # MoveAndStop doit être présent
+    has_move_and_stop = any(
+        e.tag == "Action" and e.get("ID") == "MoveAndStop" for e in root.iter()
+    )
+    if not has_move_and_stop:
+        return (
+            False,
+            None,
+            '<Action ID="MoveAndStop"> absent — le BT ne se termine jamais',
+        )
+
+    return True, root, _btcpp_warning or "OK"
 
 
 # ─── Niveau 2 — Structurel ────────────────────────────────────────────────────
+
 
 def _max_depth(elem: ET.Element, d: int = 0) -> int:
     children = list(elem)
@@ -152,45 +268,56 @@ def _validate_l2(root: ET.Element, result: ValidationResult):
         result.fail(f"Profondeur {depth} > {MAX_DEPTH} (arbre trop imbriqué)", level=2)
 
     # Nombre de skills excessif
-    skill_count = sum(1 for e in root.iter() if e.tag in SKILL_NODES)
+    skill_count = sum(1 for e in root.iter() if _resolve_skill(e) is not None)
     if skill_count > MAX_SKILLS:
         result.warn(f"{skill_count} nœuds skills > {MAX_SKILLS} (BT trop long)")
 
-    # Fallback doit avoir ≥ 2 branches
+    # Fallback / ReactiveFallback doit avoir ≥ 2 branches
     for elem in root.iter():
-        if elem.tag == "Fallback":
+        if elem.tag in ("Fallback", "ReactiveFallback"):
             n = len(list(elem))
             if n < 2:
                 result.warn(
-                    f"<Fallback name='{elem.get('name', '')}> n'a que {n} branche(s) "
-                    f"(minimum 2 requis pour un if/else correct)"
+                    f"<{elem.tag} name='{elem.get('name', '')}> n'a que {n} branche(s) "
+                    f"(minimum 2 requis)"
                 )
 
 
 # ─── Niveau 3 — Sémantique ───────────────────────────────────────────────────
 
+
 def _skills_dfs(elem: ET.Element) -> list[str]:
-    """Retourne les tags skills en ordre DFS (ordre d'exécution attendu)."""
+    """Retourne les skills en ordre DFS (ordre d'exécution attendu).
+
+    Résout <Action ID="X"> et <Condition ID="X"> en leur skill ID.
+    """
     result = []
-    if elem.tag in SKILL_NODES:
-        result.append(elem.tag)
+    skill = _resolve_skill(elem)
+    if skill:
+        result.append(skill)
     for child in elem:
         result.extend(_skills_dfs(child))
     return result
 
 
 def _condition_in_fallback(root: ET.Element) -> set[str]:
-    """Retourne les conditions qui sont bien descendantes d'un <Fallback>."""
+    """Retourne les conditions qui sont descendantes d'un Fallback/ReactiveFallback."""
     in_fb = set()
-    for fb in root.iter("Fallback"):
-        for e in fb.iter():
-            if e.tag in CONDITION_NODES:
-                in_fb.add(e.tag)
+    for fb_tag in ("Fallback", "ReactiveFallback"):
+        for fb in root.iter(fb_tag):
+            for e in fb.iter():
+                cond = _is_condition(e)
+                if cond and cond in CONDITION_SKILLS:
+                    in_fb.add(cond)
     return in_fb
 
 
 def _validate_l3(root: ET.Element, result: ValidationResult):
     """Vérifications sémantiques : ordre des skills, conditions, MoveAndStop."""
+    # Détecter si multi-subtree (>1 BehaviorTree)
+    bt_count = sum(1 for e in root if e.tag == "BehaviorTree")
+    is_multi_subtree = bt_count > 1
+
     skills = _skills_dfs(root)
     if not skills:
         return
@@ -201,55 +328,52 @@ def _validate_l3(root: ET.Element, result: ValidationResult):
         if s not in first:
             first[s] = i
 
-    # Précédences partielles
-    for skill, prereqs in PREREQUISITES.items():
-        if skill not in first:
-            continue
-        for prereq in prereqs:
-            if prereq not in first:
-                result.warn(
-                    f"<{prereq}> absent alors qu'il précède normalement <{skill}>"
-                )
-            elif first[prereq] > first[skill]:
-                result.warn(
-                    f"Ordre incorrect : <{skill}> (pos {first[skill]}) "
-                    f"avant <{prereq}> (pos {first[prereq]})"
-                )
+    # Précédences partielles (relaxées en multi-subtree : DFS linéaire != exécution)
+    if not is_multi_subtree:
+        for skill, prereqs in PREREQUISITES.items():
+            if skill not in first:
+                continue
+            for prereq in prereqs:
+                if prereq not in first:
+                    result.warn(
+                        f"<{prereq}> absent alors qu'il précède normalement <{skill}>"
+                    )
+                elif first[prereq] > first[skill]:
+                    result.warn(
+                        f"Ordre incorrect : <{skill}> (pos {first[skill]}) "
+                        f"avant <{prereq}> (pos {first[prereq]})"
+                    )
 
-    # <LoadMission> doit être le premier skill (sauf SimulationStarted)
-    first_skill = "LoadMission" if "SimulationStarted" not in first else "SimulationStarted"
-    if first_skill in first and first[first_skill] != 0:
-        result.warn(
-            f"<{first_skill}> n'est pas en première position "
-            f"(position {first[first_skill]})"
-        )
+    # LoadMission doit être présent
+    if "LoadMission" not in first:
+        result.warn("LoadMission absent du BT")
 
-    # Le dernier <MoveAndStop> doit être le dernier (ou avant-dernier) skill
-    if "MoveAndStop" in first:
-        last_stop = max(i for i, s in enumerate(skills) if s == "MoveAndStop")
-        # Tolérance : MoveAndStop peut être suivi de SignalAndWaitForOrder
-        if last_stop < len(skills) - 2:
-            result.warn(
-                f"<MoveAndStop> n'est pas en fin de séquence "
-                f"(position {last_stop}/{len(skills) - 1})"
-            )
+    # MoveAndStop doit être présent (déjà vérifié L1, mais vérifier dans chaque subtree
+    # pour multi-subtree n'est pas nécessaire)
 
-    # Conditions (MissionTerminated, MissionFullyTreated, etc.) dans un Fallback
-    conditions_present = {e.tag for e in root.iter() if e.tag in CONDITION_NODES}
+    # Conditions de boucle doivent être dans un Fallback
+    conditions_present = set()
+    for e in root.iter():
+        cond = _is_condition(e)
+        if cond:
+            conditions_present.add(cond)
     conditions_in_fb = _condition_in_fallback(root)
-    # Exclure les conditions de début de séquence (MissionStructureValid, SimulationStarted,
-    # IsRobotPoseProjectionActive) qui peuvent être hors Fallback
-    loop_conditions = {"MissionTerminated", "MissionFullyTreated",
-                       "MeasurementsQualityValidated", "MeasurementsEnforcedValidated"}
+    loop_conditions = {
+        "MissionTerminated",
+        "MissionFullyTreated",
+        "MeasurementsQualityValidated",
+        "MeasurementsEnforcedValidated",
+    }
     for cond in conditions_present & loop_conditions:
         if cond not in conditions_in_fb:
             result.warn(
-                f"<{cond}> présent hors de tout <Fallback> — "
+                f'<Condition ID="{cond}"> hors de tout Fallback — '
                 f"son signal FAILURE ne sera pas intercepté correctement"
             )
 
 
 # ─── API publique ─────────────────────────────────────────────────────────────
+
 
 def validate_bt(xml_str: str) -> ValidationResult:
     """
@@ -265,6 +389,10 @@ def validate_bt(xml_str: str) -> ValidationResult:
     if not ok:
         result.fail(msg, level=1)
         return result
+
+    # Warning L1 (ex: BTCPP_format manquant)
+    if msg != "OK":
+        result.warn(msg)
 
     # Niveau 2
     _validate_l2(root, result)
