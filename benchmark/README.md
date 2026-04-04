@@ -73,7 +73,7 @@ pip install -r requirements.txt
 
 ```bash
 python3 src/uml/generate_nav4rail_catalog.py \\
-  --nav4rails-repo ../../nav4rails_repo \\
+  --nav4rails-repo ../../../nav4rails_repo \\
   --output data/nav4rail_skills_from_uml.json \\
   --constraints-dir constraints
 ```

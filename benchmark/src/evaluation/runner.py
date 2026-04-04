@@ -75,9 +75,16 @@ class ExperimentRunner:
         mission: str,
         generate_fn: Callable[[list[dict[str, str]]], str],
         reference_xml: Optional[str] = None,
+        few_shot_examples: Sequence[Any] = (),
     ) -> dict[str, Any]:
         paths = create_run_paths(self.config.output_root)
-        prompt_bundle = render_prompt_bundle(mission=mission, catalog=self.catalog, prompt_config=self.config.prompt)
+        prompt_bundle = render_prompt_bundle(
+            mission=mission,
+            catalog=self.catalog,
+            prompt_config=self.config.prompt,
+            few_shot_examples=few_shot_examples,
+            xsd_path=self.config.xsd_path,
+        )
         started = time.perf_counter()
         raw_output = generate_fn(prompt_bundle["messages"])
         latency_ms = (time.perf_counter() - started) * 1000.0

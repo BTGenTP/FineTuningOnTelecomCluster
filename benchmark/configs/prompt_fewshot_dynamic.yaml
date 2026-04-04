@@ -1,0 +1,17 @@
+name: nav4rail_fewshot_dynamic
+task: xml_generation
+output_root: runs/prompt_fewshot_dynamic
+method: few_shot_dynamic
+catalog_path: data/nav4rail_catalog.json
+xsd_path: null
+model:
+  model_name_or_path: mistralai/Mistral-7B-Instruct-v0.3
+  dtype: bf16
+  quantization: 4bit
+prompt:
+  mode: few_shot
+  few_shot_k: 3
+  few_shot_dynamic: true
+  few_shot_pool_path: data/dataset_synthetic.jsonl
+  include_schema: false
+  include_xsd: false

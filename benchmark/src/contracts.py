@@ -85,7 +85,11 @@ class PeftConfig:
 class PromptConfig:
     mode: str = "zero_shot"
     few_shot_k: int = 0
+    few_shot_dynamic: bool = True
+    few_shot_pool_path: Optional[str] = None
     include_schema: bool = False
+    include_xsd: bool = False
+    xsd_max_chars: int = 8000
     system_rules: List[str] = field(default_factory=list)
 
 

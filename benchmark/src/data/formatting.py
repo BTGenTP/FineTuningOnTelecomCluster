@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from .catalog import nav4rail_system_rules, skill_map
 
@@ -36,6 +37,16 @@ def render_system_prompt(catalog: Mapping[str, Any], *, include_schema: bool) ->
     return "\n".join(lines)
 
 
+def _read_xsd_snippet(xsd_path: str | Path, *, max_chars: int) -> Optional[str]:
+    p = Path(xsd_path).expanduser().resolve()
+    if not p.exists():
+        return None
+    text = p.read_text(encoding="utf-8", errors="replace")
+    if max_chars and len(text) > max_chars:
+        text = text[:max_chars] + "\n... (truncated)\n"
+    return text.strip()
+
+
 def render_few_shot_block(examples: Sequence[PromptExample]) -> str:
     if not examples:
         return ""
@@ -52,8 +63,15 @@ def build_chat_messages(
     mode: str,
     few_shot_examples: Sequence[PromptExample] = (),
     include_schema: bool = False,
+    xsd_path: Optional[str | Path] = None,
+    include_xsd: bool = False,
+    xsd_max_chars: int = 8000,
 ) -> list[dict[str, str]]:
     system = render_system_prompt(catalog, include_schema=include_schema or mode == "schema_guided")
+    if (include_xsd or mode == "schema_guided") and xsd_path:
+        snippet = _read_xsd_snippet(xsd_path, max_chars=xsd_max_chars)
+        if snippet:
+            system = system + "\n\nBehaviorTree.CPP v4 XSD (reference):\n" + snippet
     user_parts = [f"Mission:\n{mission.strip()}"]
     shot_block = render_few_shot_block(few_shot_examples)
     if shot_block:
