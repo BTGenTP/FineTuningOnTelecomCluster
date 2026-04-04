@@ -3,7 +3,17 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .catalog_generator import build_catalog_from_uml, write_catalog
+if __package__ in (None, ""):
+    # Allow direct execution: python src/uml/generate_nav4rail_catalog.py ...
+    import sys
+
+    this_file = Path(__file__).resolve()
+    benchmark_root = this_file.parents[2]
+    if str(benchmark_root) not in sys.path:
+        sys.path.insert(0, str(benchmark_root))
+    from src.uml.catalog_generator import build_catalog_from_uml, write_catalog  # type: ignore
+else:
+    from .catalog_generator import build_catalog_from_uml, write_catalog
 
 
 def parse_args() -> argparse.Namespace:

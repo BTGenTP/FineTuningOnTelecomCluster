@@ -16,6 +16,7 @@ from ..methods.rl.grpo import GrpoCandidate, run_grpo_epoch
 from ..methods.rl.ppo import PpoStepResult, run_ppo_epoch
 from ..methods.sft import run_sft
 from ..rewards.validator import validate
+from ..xml_utils import extract_root_xml, pretty_print_xml
 
 
 def _iso_now() -> str:
@@ -80,8 +81,15 @@ class ExperimentRunner:
         started = time.perf_counter()
         raw_output = generate_fn(prompt_bundle["messages"])
         latency_ms = (time.perf_counter() - started) * 1000.0
+
+        extracted_xml = extract_root_xml(raw_output) or raw_output.strip()
+        try:
+            pretty_xml = pretty_print_xml(extracted_xml, indent="  ", ensure_trailing_newline=True)
+        except Exception:
+            pretty_xml = extracted_xml + ("\n" if not extracted_xml.endswith("\n") else "")
+
         report = validate(
-            xml_text=raw_output,
+            xml_text=extracted_xml,
             catalog_path=self.config.catalog_path,
             xsd_path=self.config.xsd_path,
             strict=True,
@@ -94,15 +102,15 @@ class ExperimentRunner:
             latency_ms=latency_ms,
             tokens_generated=max(1, len(raw_output.split())),
             vram_mb=_peak_vram_mb(),
-            prediction_xml=raw_output,
+            prediction_xml=extracted_xml,
             reference_xml=reference_xml,
             catalog=self.catalog,
         )
         paths.mission_txt.write_text(mission + "\n", encoding="utf-8")
         _write_json(paths.experiment_json, asdict(self.config))
         paths.prompt_rendered_txt.write_text(json.dumps(prompt_bundle, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        paths.llm_output_raw_txt.write_text(raw_output + "\n", encoding="utf-8")
-        paths.generated_bt_xml.write_text(raw_output + "\n", encoding="utf-8")
+        paths.llm_output_raw_txt.write_text(raw_output + ("\n" if not raw_output.endswith("\n") else ""), encoding="utf-8")
+        paths.generated_bt_xml.write_text(pretty_xml, encoding="utf-8")
         _write_json(paths.validation_report_json, report.to_dict())
         _write_json(paths.metrics_json, metrics)
         paths.summary_md.write_text(render_markdown_table([metrics]) + "\n", encoding="utf-8")

@@ -5,6 +5,18 @@ from typing import Optional
 from xml.etree import ElementTree as ET
 
 
+def extract_root_xml(text: str) -> Optional[str]:
+    s = text or ""
+    start = s.find("<root")
+    if start < 0:
+        return None
+    end = s.find("</root>", start)
+    if end < 0:
+        return None
+    end += len("</root>")
+    return s[start:end].strip()
+
+
 def pretty_print_xml(xml_text: str, *, indent: str = "  ", ensure_trailing_newline: bool = True) -> str:
     root = ET.fromstring(xml_text)
     # Python 3.9+ supports ET.indent

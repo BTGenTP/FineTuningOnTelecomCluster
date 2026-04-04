@@ -4,8 +4,11 @@ import json
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List
+from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional
 from xml.etree.ElementTree import Element, SubElement, tostring
+
+from ..constraints.loader import load_constraints
+from ..xml_utils import pretty_print_xml
 
 
 PROMPT_TEMPLATES = [
@@ -43,43 +46,114 @@ def _action(parent: Element, tag: str, **attrs: str) -> Element:
     return SubElement(parent, tag, attrs)
 
 
+def _pattern_required_sequence(constraints: Mapping[str, Any], pattern_name: str) -> list[Mapping[str, Any]]:
+    patterns = (constraints.get("patterns") or {}).get("patterns") or {}
+    patt = patterns.get(pattern_name) or {}
+    seq = patt.get("required_sequence") or []
+    return list(seq) if isinstance(seq, list) else []
+
+
+def _emit_preparation_nodes_from_pattern(seq: Element, ctx: GenerationContext, required: list[Mapping[str, Any]]) -> None:
+    # Data-driven but still keeps blackboard coherence based on known skill semantics.
+    for item in required:
+        tag = str(item.get("tag"))
+        sid = str(item.get("id"))
+        if tag == "Action" and sid == "LoadMission":
+            _action(seq, "Action", name="LOAD MISSION", ID="LoadMission", mission_file_path=ctx.vars["mission_file"])
+        elif tag == "Condition" and sid == "MissionStructureValid":
+            _action(seq, "Condition", name="IS MISSION STRUCTURE VALID", ID="MissionStructureValid")
+        elif tag == "Action" and sid == "UpdateCurrentGeneratedActivity":
+            _action(
+                seq,
+                "Action",
+                name="UPDATE CURRENT ACTIVITY",
+                ID="UpdateCurrentGeneratedActivity",
+                type=ctx.vars["type"],
+                origin_sph=ctx.vars["origin_sph"],
+                target_sph=ctx.vars["target_sph"],
+                forbidden_atoms_out=ctx.vars["forbidden_atoms"],
+            )
+        elif tag == "Action" and sid == "ProjectPointOnNetwork":
+            # Two calls expected: origin then target.
+            existing = [n for n in list(seq) if n.tag == "Action" and n.attrib.get("ID") == "ProjectPointOnNetwork"]
+            if len(existing) == 0:
+                _action(seq, "Action", name="PROJECT ORIGIN", ID="ProjectPointOnNetwork", point_in=ctx.vars["origin_sph"], point_out=ctx.vars["origin"])
+            else:
+                _action(seq, "Action", name="PROJECT TARGET", ID="ProjectPointOnNetwork", point_in=ctx.vars["target_sph"], point_out=ctx.vars["target"])
+        elif tag == "Action" and sid == "CreatePath":
+            _action(
+                seq,
+                "Action",
+                name="CREATE PATH",
+                ID="CreatePath",
+                origin=ctx.vars["origin"],
+                target=ctx.vars["target"],
+                forbidden_atoms=ctx.vars["forbidden_atoms"],
+                path=ctx.vars["path"],
+            )
+        elif tag == "Action" and sid == "AgregatePath":
+            _action(seq, "Action", name="AGREGATE PATH", ID="AgregatePath", path=ctx.vars["path"])
+        elif tag == "Action" and sid == "PassAdvancedPath":
+            _action(seq, "Action", name="PASS ADVANCED PATH", ID="PassAdvancedPath", adv_path=ctx.vars["adv_path"])
+        elif tag == "Action" and sid == "PassMission":
+            _action(seq, "Action", name="PASS MISSION", ID="PassMission", mission=ctx.vars["mission"])
+        elif tag == "Action" and sid == "GenerateMissionSequence":
+            _action(
+                seq,
+                "Action",
+                name="GENERATE MOTION SEQUENCE",
+                ID="GenerateMissionSequence",
+                mission=ctx.vars["mission"],
+                mission_sequence=ctx.vars["mission_sequence"],
+            )
+        else:
+            # Unknown pattern item: ignore to keep generator robust to new constraints versions.
+            continue
+
+
 def generate_preparation_pattern(ctx: GenerationContext) -> Element:
     seq = Element("Sequence", {"name": "BASE PREPARATION"})
-    _action(seq, "Action", name="LOAD MISSION", ID="LoadMission", mission_file_path=ctx.vars["mission_file"])
-    _action(seq, "Condition", name="IS MISSION STRUCTURE VALID", ID="MissionStructureValid")
-    _action(
-        seq,
-        "Action",
-        name="UPDATE CURRENT ACTIVITY",
-        ID="UpdateCurrentGeneratedActivity",
-        type=ctx.vars["type"],
-        origin_sph=ctx.vars["origin_sph"],
-        target_sph=ctx.vars["target_sph"],
-        forbidden_atoms_out=ctx.vars["forbidden_atoms"],
-    )
-    _action(seq, "Action", name="PROJECT ORIGIN", ID="ProjectPointOnNetwork", point_in=ctx.vars["origin_sph"], point_out=ctx.vars["origin"])
-    _action(seq, "Action", name="PROJECT TARGET", ID="ProjectPointOnNetwork", point_in=ctx.vars["target_sph"], point_out=ctx.vars["target"])
-    _action(
-        seq,
-        "Action",
-        name="CREATE PATH",
-        ID="CreatePath",
-        origin=ctx.vars["origin"],
-        target=ctx.vars["target"],
-        forbidden_atoms=ctx.vars["forbidden_atoms"],
-        path=ctx.vars["path"],
-    )
-    _action(seq, "Action", name="AGREGATE PATH", ID="AgregatePath", path=ctx.vars["path"])
-    _action(seq, "Action", name="PASS ADVANCED PATH", ID="PassAdvancedPath", adv_path=ctx.vars["adv_path"])
-    _action(seq, "Action", name="PASS MISSION", ID="PassMission", mission=ctx.vars["mission"])
-    _action(
-        seq,
-        "Action",
-        name="GENERATE MOTION SEQUENCE",
-        ID="GenerateMissionSequence",
-        mission=ctx.vars["mission"],
-        mission_sequence=ctx.vars["mission_sequence"],
-    )
+    constraints = load_constraints()
+    required = _pattern_required_sequence(constraints.patterns, "PreparationPattern")
+    if required:
+        _emit_preparation_nodes_from_pattern(seq, ctx, required)
+    else:
+        # Fallback to the canonical hand-written sequence.
+        _action(seq, "Action", name="LOAD MISSION", ID="LoadMission", mission_file_path=ctx.vars["mission_file"])
+        _action(seq, "Condition", name="IS MISSION STRUCTURE VALID", ID="MissionStructureValid")
+        _action(
+            seq,
+            "Action",
+            name="UPDATE CURRENT ACTIVITY",
+            ID="UpdateCurrentGeneratedActivity",
+            type=ctx.vars["type"],
+            origin_sph=ctx.vars["origin_sph"],
+            target_sph=ctx.vars["target_sph"],
+            forbidden_atoms_out=ctx.vars["forbidden_atoms"],
+        )
+        _action(seq, "Action", name="PROJECT ORIGIN", ID="ProjectPointOnNetwork", point_in=ctx.vars["origin_sph"], point_out=ctx.vars["origin"])
+        _action(seq, "Action", name="PROJECT TARGET", ID="ProjectPointOnNetwork", point_in=ctx.vars["target_sph"], point_out=ctx.vars["target"])
+        _action(
+            seq,
+            "Action",
+            name="CREATE PATH",
+            ID="CreatePath",
+            origin=ctx.vars["origin"],
+            target=ctx.vars["target"],
+            forbidden_atoms=ctx.vars["forbidden_atoms"],
+            path=ctx.vars["path"],
+        )
+        _action(seq, "Action", name="AGREGATE PATH", ID="AgregatePath", path=ctx.vars["path"])
+        _action(seq, "Action", name="PASS ADVANCED PATH", ID="PassAdvancedPath", adv_path=ctx.vars["adv_path"])
+        _action(seq, "Action", name="PASS MISSION", ID="PassMission", mission=ctx.vars["mission"])
+        _action(
+            seq,
+            "Action",
+            name="GENERATE MOTION SEQUENCE",
+            ID="GenerateMissionSequence",
+            mission=ctx.vars["mission"],
+            mission_sequence=ctx.vars["mission_sequence"],
+        )
     return seq
 
 
@@ -149,7 +223,8 @@ def build_nav4rail_tree(mission_name: str = "synthetic_inspection_mission") -> s
     _behavior_tree(root, "deccelerate", dec)
 
     _behavior_tree(root, "reach_and_stop_inspecting", generate_inspection_pattern(ctx, step_type="12", move_node_id="MoveAndStop"))
-    return tostring(root, encoding="unicode")
+    raw = tostring(root, encoding="unicode")
+    return pretty_print_xml(raw, indent="  ", ensure_trailing_newline=True)
 
 
 def generate_record(seed: int) -> Dict[str, Any]:

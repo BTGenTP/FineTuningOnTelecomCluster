@@ -47,19 +47,33 @@ def parse_skills_uml(path: str | Path) -> List[UmlOperation]:
         descriptions[base_op] = (sd.attrib.get("description") or "").strip()
 
     ops: List[UmlOperation] = []
-    for iface in root.findall(".//uml:Interface", UML_NS):
-        for op in iface.findall("./ownedOperation", UML_NS):
-            op_id = op.attrib.get("{http://www.omg.org/spec/XMI/20131001}id") or op.attrib.get("xmi:id") or ""
+    xmi_type_attr = f"{{{UML_NS['xmi']}}}type"
+    xmi_id_attr = f"{{{UML_NS['xmi']}}}id"
+    for iface in root.iter():
+        if iface.attrib.get(xmi_type_attr) != "uml:Interface":
+            continue
+        for op in list(iface):
+            if op.tag != "ownedOperation":
+                continue
+            if op.attrib.get(xmi_type_attr) != "uml:Operation":
+                continue
+            op_id = op.attrib.get(xmi_id_attr) or op.attrib.get("xmi:id") or ""
             name = op.attrib.get("name") or ""
             if not op_id or not name:
                 continue
             params: List[UmlParameter] = []
-            for prm in op.findall("./ownedParameter", UML_NS):
+            for prm in list(op):
+                if prm.tag != "ownedParameter":
+                    continue
                 prm_name = prm.attrib.get("name") or ""
                 direction = prm.attrib.get("direction") or "unspecified"
                 if not prm_name:
                     continue
-                type_node = prm.find("./type", UML_NS)
+                type_node = None
+                for ch in list(prm):
+                    if ch.tag == "type":
+                        type_node = ch
+                        break
                 type_href = type_node.attrib.get("href") if type_node is not None else None
                 params.append(UmlParameter(name=prm_name, direction=direction, type_href=type_href))
             ops.append(
