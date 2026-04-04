@@ -1,0 +1,25 @@
+schema_version: 0.1
+description: "Blackboard dataflow constraints (L2 + L3)."
+
+rules:
+  - id: motionParamsChaining
+    description: "Move/Deccelerate/MoveAndStop must consume the same motion_params produced by PassMotionParameters in the same Sequence."
+    producer:
+      skill: PassMotionParameters
+      attr: motion_params
+    consumers:
+      - { skill: Move, attr: motion_params }
+      - { skill: Deccelerate, attr: motion_params }
+      - { skill: MoveAndStop, attr: motion_params }
+
+  - id: createPathChaining
+    description: "CreatePath origin/target must come from ProjectPointOnNetwork outputs in same Sequence."
+    producer:
+      skill: ProjectPointOnNetwork
+      attrs_out: [point_out]
+    consumers:
+      - { skill: CreatePath, attrs_in: [origin, target] }
+
+scope:
+  default: Sequence
+

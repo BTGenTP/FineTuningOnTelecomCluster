@@ -1,0 +1,16 @@
+schema_version: 0.1
+description: "Explicit enum constraints used by catalog generation and validator typing."
+
+enums:
+  CheckCurrentStepType.type_to_be_checked:
+    values: ["0", "1", "2", "3", "4", "10", "11", "12", "13", "14"]
+  Move.threshold_type:
+    values: ["1", "2", "3"]
+
+tag_overrides:
+  # Optional overrides if inference from behaviortreeschema is ambiguous.
+  MissionTerminated: Condition
+  MissionStructureValid: Condition
+  MeasurementsQualityValidated: Condition
+  MeasurementsEnforcedValidated: Condition
+

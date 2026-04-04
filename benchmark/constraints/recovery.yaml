@@ -1,0 +1,18 @@
+schema_version: 0.1
+description: "Recovery policy constraints."
+
+policies:
+  inspection_watchdog:
+    applies_when:
+      skill: CheckCurrentStepType
+      attr: type_to_be_checked
+      values: ["10", "11", "12", "13", "14"]
+    must_follow_within_subtree:
+      - { skill: AnalyseMeasurements }
+    must_contain_anywhere_in_subtree:
+      - { skill: MeasurementsQualityValidated }
+      - { skill: MeasurementsEnforcedValidated }
+    must_contain_corrective_pair:
+      - { skill: GenerateCorrectiveSubSequence }
+      - { skill: InsertCorrectiveSubSequence }
+

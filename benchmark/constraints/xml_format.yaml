@@ -1,0 +1,14 @@
+schema_version: 0.1
+description: "XML artifact formatting requirements."
+
+pretty_print:
+  enabled: true
+  indent: "  "
+  newline: "\n"
+  xml_declaration: false
+  ensure_trailing_newline: true
+
+artifact_policy:
+  llm_output_raw: "keep_as_is"
+  generated_bt_xml: "pretty_print"
+

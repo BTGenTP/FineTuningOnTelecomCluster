@@ -1,0 +1,53 @@
+schema_version: 0.1
+description: "NAV4RAIL macro-skill patterns (design patterns) used for prompting, dataset generation and validation."
+
+patterns:
+  PreparationPattern:
+    description: "Preparation sequence must build mission -> validate -> project -> path -> aggregate -> pass -> generate sequence."
+    required_sequence:
+      - { tag: Action, id: LoadMission }
+      - { tag: Condition, id: MissionStructureValid }
+      - { tag: Action, id: UpdateCurrentGeneratedActivity }
+      - { tag: Action, id: ProjectPointOnNetwork }
+      - { tag: Action, id: ProjectPointOnNetwork }
+      - { tag: Action, id: CreatePath }
+      - { tag: Action, id: AgregatePath }
+      - { tag: Action, id: PassAdvancedPath }
+      - { tag: Action, id: PassMission }
+      - { tag: Action, id: GenerateMissionSequence }
+
+  ExecutionLoopPattern:
+    description: "Execution loop must be ReactiveFallback with Repeat(num_cycles=-1) and MissionTerminated."
+    root:
+      tag: ReactiveFallback
+      required_children:
+        - { tag: Repeat, attrs: { num_cycles: "-1" } }
+        - { tag: Condition, id: MissionTerminated }
+    motion_selector:
+      description: "Repeat must contain a motion selector (Fallback) with SubTreePlus children."
+      repeat_child_chain:
+        - { tag: Fallback }
+        - { tag: SubTreePlus }
+
+  InspectionPattern:
+    description: "Inspection motion must start measurements, perform action, stop measurements, analyze, then fallback quality/corrective."
+    trigger:
+      tag: Condition
+      id: CheckCurrentStepType
+      attr: type_to_be_checked
+      values: ["10", "11", "12", "13", "14"]
+    required_subsequence:
+      - { tag: Action, id: PassMotionParameters }
+      - { tag: Action, id: ManageMeasurements, attrs: { mode: "start" } }
+      - { tag: Action, id_any_of: [Move, Deccelerate, MoveAndStop] }
+      - { tag: Action, id: ManageMeasurements, attrs: { mode: "stop" } }
+      - { tag: Action, id: AnalyseMeasurements }
+    required_fallback:
+      tag: Fallback
+      must_contain_any:
+        - { tag: Condition, id: MeasurementsQualityValidated }
+        - { tag: Condition, id: MeasurementsEnforcedValidated }
+      corrective_branch_must_contain:
+        - { tag: Action, id: GenerateCorrectiveSubSequence }
+        - { tag: Action, id: InsertCorrectiveSubSequence }
+

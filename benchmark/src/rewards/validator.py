@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 from xml.etree import ElementTree as ET
 
+from ..constraints.fsm import evaluate_fsm
+from ..constraints.loader import load_constraints
+from ..constraints.patterns import evaluate_patterns
 from ..contracts import ValidationIssue, ValidationReport, ValidationSummary
 from ..data.catalog import control_nodes, default_catalog_path, load_catalog, skill_map
 
@@ -330,63 +333,35 @@ def _validate_nav4rail_semantics(
     skill_specs: Mapping[str, Any],
     *,
     strict: bool,
+    constraints_dir: Optional[str | Path] = None,
 ) -> None:
-    execute_roots = [
-        body
-        for body in (_behavior_tree_body(bt) for bt in bt_defs.values())
-        if body is not None and body.tag == "ReactiveFallback"
-    ]
-    has_valid_loop = False
-    for node in execute_roots:
-        children = list(node)
-        has_repeat = any(child.tag == "Repeat" and child.attrib.get("num_cycles") == "-1" for child in children)
-        has_terminated = any(
-            _is_skill_node(child) and child.attrib.get("ID") == "MissionTerminated" for child in children
-        )
-        if has_repeat and has_terminated:
-            has_valid_loop = True
-            break
-    if not has_valid_loop:
+    constraints = load_constraints(constraints_dir)
+    pattern_findings = evaluate_patterns(root, constraints.patterns)
+    satisfied = {finding.pattern for finding in pattern_findings if finding.ok}
+    for finding in pattern_findings:
+        if not finding.ok:
+            issues.append(
+                _issue(
+                    "L3",
+                    finding.code,
+                    f"{finding.pattern}: {finding.details}",
+                    severity=_coerce_severity(strict),
+                )
+            )
+
+    fsm_ok, final_state, fsm_issues = evaluate_fsm(root, constraints.fsm, satisfied_patterns=satisfied)
+    for it in fsm_issues:
+        sev = _coerce_severity(strict) if it.code == "fsm_illegal_transition" else "warning"
         issues.append(
             _issue(
                 "L3",
-                "nav4rail_execution_loop",
-                "Expected a ReactiveFallback execution root containing Repeat num_cycles='-1' and MissionTerminated.",
-                severity=_coerce_severity(strict),
+                it.code,
+                it.message,
+                severity=sev,
             )
         )
-
-    for bt in bt_defs.values():
-        skill_nodes = [node for node in bt.iter() if _is_skill_node(node)]
-        inspection_triggered = any(
-            node.attrib.get("ID") == "CheckCurrentStepType" and node.attrib.get("type_to_be_checked") in INSPECTION_TYPES
-            for node in skill_nodes
-        )
-        if not inspection_triggered:
-            continue
-        ids = {node.attrib.get("ID", "") for node in skill_nodes}
-        if "AnalyseMeasurements" not in ids:
-            issues.append(
-                _issue(
-                    "L3",
-                    "inspection_requires_analysis",
-                    "Inspection subtree is missing AnalyseMeasurements.",
-                    severity=_coerce_severity(strict),
-                    xpath=_xpath_of(bt, parent_map),
-                    node=bt,
-                )
-            )
-        if not ({"GenerateCorrectiveSubSequence", "InsertCorrectiveSubSequence"} <= ids or "MeasurementsEnforcedValidated" in ids or "MeasurementsQualityValidated" in ids):
-            issues.append(
-                _issue(
-                    "L3",
-                    "inspection_requires_fallback",
-                    "Inspection subtree must contain a quality fallback or corrective sequence.",
-                    severity=_coerce_severity(strict),
-                    xpath=_xpath_of(bt, parent_map),
-                    node=bt,
-                )
-            )
+    if not fsm_ok:
+        issues.append(_issue("L3", "fsm_failed", f"FSM validation failed (final_state={final_state}).", severity=_coerce_severity(strict)))
 
 
 def validate(
@@ -397,6 +372,7 @@ def validate(
     xsd_path: Optional[str | Path] = None,
     strict: bool = True,
     external_blackboard: Optional[Iterable[str]] = None,
+    constraints_dir: Optional[str | Path] = None,
 ) -> ValidationReport:
     resolved_catalog = Path(catalog_path).expanduser().resolve() if catalog_path else default_catalog_path().resolve()
     catalog = load_catalog(resolved_catalog)
@@ -529,7 +505,7 @@ def validate(
         if body is not None and body.tag == "Sequence":
             _sequence_blackboard_check(body, parent_map, skill_specs, set(external), issues, strict=strict)
 
-    _validate_nav4rail_semantics(root, bt_defs, parent_map, issues, skill_specs, strict=strict)
+    _validate_nav4rail_semantics(root, bt_defs, parent_map, issues, skill_specs, strict=strict, constraints_dir=constraints_dir)
 
     report = ValidationReport(
         ok=not any(issue.severity == "error" for issue in issues),

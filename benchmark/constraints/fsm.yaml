@@ -1,0 +1,35 @@
+schema_version: 0.1
+description: "NAV4RAIL FSM constraints for semantic validation (L3)."
+
+machines:
+  Nav4RailMissionFSM:
+    initial_state: Start
+    states:
+      - Start
+      - MissionLoaded
+      - MissionValidated
+      - PathReady
+      - ExecutionLoopActive
+      - InspectionRunning
+      - InspectionAnalyzed
+      - CorrectiveOrOk
+      - Terminated
+    transitions:
+      - { from: Start, on_skill: LoadMission, to: MissionLoaded }
+      - { from: MissionLoaded, on_skill: MissionStructureValid, to: MissionValidated }
+      - { from: MissionValidated, on_skill: CreatePath, to: PathReady }
+      - { from: PathReady, on_pattern: ExecutionLoopPattern, to: ExecutionLoopActive }
+      - { from: ExecutionLoopActive, on_skill: CheckCurrentStepType, to: ExecutionLoopActive }
+      - { from: ExecutionLoopActive, on_skill: ManageMeasurements, to: InspectionRunning }
+      - { from: InspectionRunning, on_skill: AnalyseMeasurements, to: InspectionAnalyzed }
+      - { from: InspectionAnalyzed, on_skill: MeasurementsQualityValidated, to: CorrectiveOrOk }
+      - { from: InspectionAnalyzed, on_skill: MeasurementsEnforcedValidated, to: CorrectiveOrOk }
+      - { from: CorrectiveOrOk, on_skill: InsertCorrectiveSubSequence, to: ExecutionLoopActive }
+      - { from: CorrectiveOrOk, on_skill: UpdateCurrentExecutedStep, to: ExecutionLoopActive }
+      - { from: ExecutionLoopActive, on_skill: UpdateCurrentExecutedStep, to: ExecutionLoopActive }
+      - { from: ExecutionLoopActive, on_skill: MissionTerminated, to: Terminated }
+
+    illegal_if_missing:
+      - { required_state: MissionValidated, before_skill: Move, message: "Cannot move before mission validation." }
+      - { required_state: PathReady, before_skill: PassAdvancedPath, message: "Cannot pass advanced path before path is ready." }
+
