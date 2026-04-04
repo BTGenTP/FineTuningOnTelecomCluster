@@ -1,0 +1,4 @@
+| run_id | method | model | xml_valid | latency_ms |
+| --- | --- | --- | --- | --- |
+| r1 | zero_shot | dummy | True | 10.0 |
+| r2 | few_shot | dummy | False | 20.0 |

@@ -1,0 +1,17 @@
+{
+  "mode": "zero_shot",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You generate only BehaviorTree.CPP v4 XML.\nOutput must start with <root> and contain complete BehaviorTree definitions.\nUse only NAV4RAIL skills from the catalog.\nNever invent IDs, tags, or blackboard ports.\n- No action node may consume a blackboard input before the same Sequence or parent flow has produced it.\n- Inspection motion steps must be followed by AnalyseMeasurements and a fallback or corrective reaction.\n- The continuous execution loop must be wrapped in ReactiveFallback containing Repeat num_cycles='-1' plus MissionTerminated."
+    },
+    {
+      "role": "user",
+      "content": "Mission:\nmission smoke\n\nReturn only the XML."
+    }
+  ],
+  "metadata": {
+    "few_shot_k": 0,
+    "include_schema": false
+  }
+}

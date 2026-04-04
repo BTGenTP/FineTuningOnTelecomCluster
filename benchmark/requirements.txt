@@ -1,0 +1,15 @@
+accelerate
+bitsandbytes
+datasets
+lxml
+matplotlib
+numpy
+omegaconf
+pandas
+peft
+pyyaml
+pytest
+seaborn
+torch
+transformers
+trl
