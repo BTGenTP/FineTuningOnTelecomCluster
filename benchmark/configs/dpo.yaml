@@ -1,0 +1,24 @@
+name: nav4rail_dpo
+task: dpo
+output_root: runs/dpo
+method: dpo
+catalog_path: data/nav4rail_catalog.json
+xsd_path: null
+model:
+  model_name_or_path: mistralai/Mistral-7B-Instruct-v0.3
+  dtype: bf16
+  quantization: 4bit
+peft:
+  # Optionally provide adapter_path via CLI for chosen model.
+  method: null
+prompt:
+  mode: zero_shot
+  few_shot_k: 0
+  include_schema: true
+training:
+  output_dir: artifacts/dpo
+  learning_rate: 0.00005
+  batch_size: 1
+  gradient_accumulation_steps: 4
+  num_train_epochs: 1.0
+  max_seq_length: 2048

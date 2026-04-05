@@ -14,5 +14,20 @@ cd "$(dirname "$0")/.."
 
 source .venv/bin/activate || true
 
-python3 -c "print('TODO: wire config loader + sft runner (src/methods/sft.py) into a CLI entrypoint.')"
+export PYTHONPATH="$PWD"
+
+CONFIG="${CONFIG:-configs/sft_lora.yaml}"
+OUTROOT="${OUTROOT:-runs/slurm/${SLURM_JOB_NAME}_${SLURM_JOB_ID}}"
+DATASET="${DATASET:-}"
+N_TRAIN="${N_TRAIN:-500}"
+WRITE_DATASET="${WRITE_DATASET:-data/dataset_synthetic.jsonl}"
+
+ARGS=(--config "$CONFIG" --output-root "$OUTROOT")
+if [[ -n "${DATASET}" ]]; then
+  ARGS+=(--dataset "$DATASET")
+else
+  ARGS+=(--generate-synthetic "$N_TRAIN" --write-dataset "$WRITE_DATASET")
+fi
+
+python3 scripts/sft_train.py "${ARGS[@]}"
 

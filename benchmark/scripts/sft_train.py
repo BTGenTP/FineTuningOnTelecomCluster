@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from scripts._paths import ensure_sys_path
+from _paths import ensure_sys_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,12 +30,12 @@ def main() -> int:
 
     rows: list[dict] = []
     if args.dataset:
-        from scripts._jsonl import read_jsonl
+        from _jsonl import read_jsonl
 
         rows = list(read_jsonl(args.dataset))
     else:
         from src.data.synthetic_generator import iter_dataset
-        from scripts._jsonl import write_jsonl
+        from _jsonl import write_jsonl
 
         rows = list(iter_dataset(args.generate_synthetic))
         if args.write_dataset:

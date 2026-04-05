@@ -4,8 +4,9 @@ This package benchmarks constrained LLM generation of BehaviorTree.CPP v4 XML fo
 
 ## Layout
 
-- `data/nav4rail_catalog.json`: local source of truth for the 27 NAV4RAIL skills.
-- `data/nav4rail_skills_from_uml.json`: generated snapshot from Papyrus Robotics UML (`nav4rails_repo/skills/*/*.skills.uml`) + `*.behaviortreeschema` inference.
+- `data/nav4rail_catalog.json`: **hand-curated benchmark catalog** (control nodes + strict validation contracts).
+- `data/nav4rail_skills_from_uml.json`: **generated snapshot** from Papyrus Robotics UML (`nav4rails_repo/skills/*/*.skills.uml`) + `*.behaviortreeschema` inference.
+- `data/nav4rail_catalog_merged.json`: **recommended default** catalog: starts from `nav4rail_catalog.json` (contracts stay canonical) and overlays richer UML descriptions + any missing attributes (non-breaking merge).
 - `constraints/`: separate constraints catalog (patterns, FSM, dataflow, recovery, enums, xml formatting).
 - `src/rewards/validator.py`: deterministic validator with L1 syntax, L2 structure and L3 semantics.
 - `src/data/synthetic_generator.py`: design-pattern dataset generator with explicit blackboard chaining.
@@ -78,6 +79,17 @@ python3 src/uml/generate_nav4rail_catalog.py \\
   --constraints-dir constraints
 ```
 
+### 1b) Merge UML snapshot into the benchmark catalog (recommended)
+
+This keeps **validator contracts** from `data/nav4rail_catalog.json` canonical, but refreshes skill descriptions from UML and adds any missing attributes without making validation stricter.
+
+```bash
+python3 scripts/merge_catalogs.py \\
+  --base data/nav4rail_catalog.json \\
+  --uml data/nav4rail_skills_from_uml.json \\
+  --output data/nav4rail_catalog_merged.json
+```
+
 ### 2) Generate a synthetic dataset (JSONL)
 
 ```bash
@@ -102,7 +114,7 @@ root = Path('repositories/FineTuningOnTelecomCluster/benchmark').resolve()
 sys.path.insert(0, str(root))
 from src.rewards.validator import validate
 xml = (root/'real_inspection_mission.xml').read_text(encoding='utf-8')
-report = validate(xml_text=xml, catalog_path=root/'data'/'nav4rail_catalog.json', constraints_dir=root/'constraints')
+report = validate(xml_text=xml, catalog_path=root/'data'/'nav4rail_catalog_merged.json', constraints_dir=root/'constraints')
 print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
 PY
 ```
@@ -135,7 +147,7 @@ cfg = ExperimentConfig(
   method='zero_shot',
   model=ModelConfig(model_name_or_path='dummy'),
   prompt=PromptConfig(mode='zero_shot'),
-  catalog_path=str(root/'data'/'nav4rail_catalog.json'),
+  catalog_path=str(root/'data'/'nav4rail_catalog_merged.json'),
 )
 runner = ExperimentRunner(cfg)
 
@@ -151,7 +163,55 @@ PY
 ### 5) SFT / DPO / GRPO on GPU (Colab or SLURM)
 
 - Colab: use notebooks in `notebooks/`.
-- SLURM templates: `slurm/prompt_eval.slurm`, `slurm/sft_lora.slurm`, `slurm/dpo.slurm`.
+- SLURM templates:
+  - prompt eval: `slurm/prompt_eval.slurm`
+  - SFT LoRA: `slurm/sft_lora.slurm`
+  - inference eval: `slurm/infer_eval.slurm`
+  - DPO: `slurm/dpo.slurm`
+  - GRPO: `slurm/grpo.slurm`
+  - PPO: `slurm/ppo.slurm`
+
+### 5b) Reproducible CLI entrypoints (local/Slurm)
+
+Prompt-based batch eval (supports dynamic few-shot via config):
+
+```bash
+python3 scripts/prompt_eval.py --config configs/prompt_zero_shot.yaml --n 20 --output-root runs/prompt_zero_shot
+python3 scripts/prompt_eval.py --config configs/prompt_fewshot_dynamic.yaml --n 20 --output-root runs/prompt_fewshot_dynamic
+python3 scripts/prompt_eval.py --config configs/prompt_schema_guided.yaml --n 20 --output-root runs/prompt_schema_guided
+```
+
+SFT (LoRA by default via `configs/sft_lora.yaml`):
+
+```bash
+python3 scripts/sft_train.py --config configs/sft_lora.yaml --generate-synthetic 500 --output-root runs/sft_lora
+```
+
+Inference + eval (base or adapter):
+
+```bash
+python3 scripts/infer_eval.py --config configs/prompt_zero_shot.yaml --n 50 --output-root runs/eval_base
+python3 scripts/infer_eval.py --config configs/prompt_zero_shot.yaml --n 50 --adapter artifacts/sft_lora --output-root runs/eval_adapter
+```
+
+DPO:
+
+```bash
+python3 scripts/dpo_train.py --config configs/dpo.yaml --n 50 --output-root runs/dpo
+```
+
+GRPO / PPO (reward from deterministic validator):
+
+```bash
+python3 scripts/grpo_train.py --config configs/grpo.yaml --n 50 --group-size 4 --epochs 1 --output-root runs/grpo
+python3 scripts/ppo_train.py  --config configs/ppo.yaml  --n 20 --epochs 1 --output-root runs/ppo
+```
+
+## Troubleshooting
+
+- **UML catalog is empty**: the `--nav4rails-repo` path is wrong. From `benchmark/`, the workspace layout usually requires `--nav4rails-repo ../../../nav4rails_repo`.
+- **PPO fails due to TRL API**: TRL PPO APIs vary by version. Use GRPO (`scripts/grpo_train.py`) as the lightweight baseline, or pin TRL to a version that exposes PPOTrainer + value head.
+- **Schema-guided XSD**: set `xsd_path:` in your config and keep `prompt.include_xsd: true`. XSD is truncated by `prompt.xsd_max_chars` to control token usage.
 
 ### 6) Export reports
 

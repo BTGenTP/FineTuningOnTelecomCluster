@@ -19,6 +19,11 @@ class SkillSpec:
 
 
 def default_catalog_path() -> Path:
+    # Prefer the merged catalog: keeps control nodes + system rules from base catalog,
+    # and refreshes atomic skill descriptions/attrs from the UML snapshot.
+    merged = Path(__file__).resolve().parents[2] / "data" / "nav4rail_catalog_merged.json"
+    if merged.exists():
+        return merged
     return Path(__file__).resolve().parents[2] / "data" / "nav4rail_catalog.json"
 
 

@@ -5,7 +5,7 @@ import random
 from pathlib import Path
 from typing import Any
 
-from scripts._paths import ensure_sys_path
+from _paths import ensure_sys_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -21,7 +21,7 @@ def parse_args() -> argparse.Namespace:
 
 def _load_missions(args: argparse.Namespace) -> list[str]:
     if args.missions:
-        from scripts._jsonl import read_jsonl
+        from _jsonl import read_jsonl
 
         rows = list(read_jsonl(args.missions))
         missions = [str(r.get("mission", "")).strip() for r in rows]
@@ -52,7 +52,7 @@ def main() -> int:
     device = getattr(model, "device", None)
     device_str = str(device) if device is not None else None
 
-    from scripts._hf_generate import HFChatGenerator
+    from _hf_generate import HFChatGenerator
 
     generator = HFChatGenerator(model=model, tokenizer=tokenizer, device=device_str)
 

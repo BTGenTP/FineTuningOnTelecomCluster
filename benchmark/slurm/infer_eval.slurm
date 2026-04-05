@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=nav4rail_prompt_eval
+#SBATCH --job-name=nav4rail_infer_eval
 #SBATCH --output=runs/slurm/%x_%j.out
 #SBATCH --error=runs/slurm/%x_%j.err
 #SBATCH --partition=gpu
@@ -11,24 +11,22 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-
 source .venv/bin/activate || true
-
 export PYTHONPATH="$PWD"
 
 CONFIG="${CONFIG:-configs/prompt_zero_shot.yaml}"
 OUTROOT="${OUTROOT:-runs/slurm/${SLURM_JOB_NAME}_${SLURM_JOB_ID}}"
-N="${N:-20}"
 MISSIONS="${MISSIONS:-}"
-FEWSHOT_POOL="${FEWSHOT_POOL:-}"
+N="${N:-50}"
+ADAPTER="${ADAPTER:-}"
 
 ARGS=(--config "$CONFIG" --output-root "$OUTROOT" --n "$N")
 if [[ -n "${MISSIONS}" ]]; then
   ARGS+=(--missions "$MISSIONS")
 fi
-if [[ -n "${FEWSHOT_POOL}" ]]; then
-  ARGS+=(--fewshot-pool "$FEWSHOT_POOL")
+if [[ -n "${ADAPTER}" ]]; then
+  ARGS+=(--adapter "$ADAPTER")
 fi
 
-python3 scripts/prompt_eval.py "${ARGS[@]}"
+python3 scripts/infer_eval.py "${ARGS[@]}"
 

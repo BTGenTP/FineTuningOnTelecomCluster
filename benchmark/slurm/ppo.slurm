@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=nav4rail_dpo
+#SBATCH --job-name=nav4rail_ppo
 #SBATCH --output=runs/slurm/%x_%j.out
 #SBATCH --error=runs/slurm/%x_%j.err
 #SBATCH --partition=gpu
@@ -11,28 +11,19 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-
 source .venv/bin/activate || true
-
 export PYTHONPATH="$PWD"
 
-CONFIG="${CONFIG:-configs/dpo.yaml}"
+CONFIG="${CONFIG:-configs/ppo.yaml}"
 OUTROOT="${OUTROOT:-runs/slurm/${SLURM_JOB_NAME}_${SLURM_JOB_ID}}"
 PROMPTS="${PROMPTS:-}"
 N="${N:-50}"
-CHOSEN_ADAPTER="${CHOSEN_ADAPTER:-}"
-REJECTED_ADAPTER="${REJECTED_ADAPTER:-}"
+EPOCHS="${EPOCHS:-1}"
 
-ARGS=(--config "$CONFIG" --output-root "$OUTROOT" --n "$N")
+ARGS=(--config "$CONFIG" --output-root "$OUTROOT" --n "$N" --epochs "$EPOCHS")
 if [[ -n "${PROMPTS}" ]]; then
   ARGS+=(--prompts "$PROMPTS")
 fi
-if [[ -n "${CHOSEN_ADAPTER}" ]]; then
-  ARGS+=(--chosen-adapter "$CHOSEN_ADAPTER")
-fi
-if [[ -n "${REJECTED_ADAPTER}" ]]; then
-  ARGS+=(--rejected-adapter "$REJECTED_ADAPTER")
-fi
 
-python3 scripts/dpo_train.py "${ARGS[@]}"
+python3 scripts/ppo_train.py "${ARGS[@]}"
 
