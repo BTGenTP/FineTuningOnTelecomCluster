@@ -107,7 +107,15 @@ SYSTEM_PROMPT = (
     "  reach_stop_inspect_no_wait(type=14): comme type=12 sans SignalAndWaitForOrder\n"
     "Inspection SANS controle (mesures 'a la volee') — AJOUTER :\n"
     "  types 10-14 avec ManageMeasurements MAIS SANS AnalyseMeasurements/MeasurementsQualityValidated\n\n"
-    "Condition dans Fallback : MeasurementsQualityValidated TOUJOURS enfant direct de Fallback.\n"
+    "Condition dans Fallback : MeasurementsQualityValidated TOUJOURS enfant direct de Fallback.\n\n"
+    "VARIETE STRUCTURELLE (IMPORTANT) :\n"
+    "- Adapte le name= de chaque noeud a la mission specifique (element inspecte, km, contexte).\n"
+    "- Tu PEUX varier l'ordre des subtrees dans le MOTION SELECTOR.\n"
+    "- Tu PEUX ajouter des Pause(duration) entre certaines etapes quand c'est pertinent.\n"
+    "- Tu PEUX omettre certains subtrees optionnels (ex: pass type=3 ou reach_stop_no_wait type=4 ne sont pas toujours necessaires).\n"
+    "- Les durations de Pause peuvent varier (1.0 a 5.0).\n"
+    "- Les messages de SignalAndWaitForOrder doivent refleter la mission.\n"
+    "- Ajoute des commentaires XML <!-- ... --> decrivant la mission.\n"
     "Reponds uniquement avec le XML."
 )
 
@@ -203,18 +211,34 @@ FEW_SHOT_EXAMPLE = """EXEMPLE (inspection avec controle) :
 </root>"""
 
 # Catégories de missions pour la variété
+# Poids pour atteindre ~30% Transport, ~40% Inspect+ctrl, ~20% Inspect-ctrl
+# Transport (6 templates): poids faibles → 30% total
+# Inspect+ctrl (3 templates, incl. Mission complète): poids forts → 40% total
+# Inspect-ctrl (2 templates): poids moyens → 20% total
 MISSION_CATEGORIES = [
-    "Navigation simple vers un point kilométrique (km {km})",
-    "Navigation autorisée avec autorisation du poste de contrôle vers le km {km}",
-    "Inspection des {element} entre le km {km_start} et le km {km_end}",
-    "Correction de trajectoire après détection d'anomalie au km {km}",
-    "Mission simulation : test de déplacement entre km {km_start} et km {km_end}",
-    "Inspection avec mesures renforcées des {element} au km {km}",
-    "Déplacement avec arrêts multiples aux km {km_start}, {km_mid} et {km_end}",
-    "Mission complète : préparation, navigation autorisée et inspection des {element}",
-    "Inspection des {element} à la volée entre le km {km_start} et le km {km_end}, sans contrôle des mesures par le robot",
-    "Parcours d'acquisition des {element} entre km {km_start} et km {km_end}. Les mesures seront prises à la volée sans être contrôlées",
-    "Simple transport vers le km {km}. Pas de mesure à réaliser",
+    # --- Transport (~30% cible) ---
+    ("Navigation simple vers un point kilométrique (km {km})", 5),
+    ("Navigation autorisée avec autorisation du poste de contrôle vers le km {km}", 5),
+    ("Correction de trajectoire après détection d'anomalie au km {km}", 5),
+    ("Mission simulation : test de déplacement entre km {km_start} et km {km_end}", 5),
+    ("Déplacement avec arrêts multiples aux km {km_start}, {km_mid} et {km_end}", 5),
+    ("Simple transport vers le km {km}. Pas de mesure à réaliser", 5),
+    # --- Inspect+ctrl (~40% cible) ---
+    ("Inspection des {element} entre le km {km_start} et le km {km_end}", 13),
+    ("Inspection avec mesures renforcées des {element} au km {km}", 13),
+    (
+        "Mission complète : préparation, navigation autorisée et inspection des {element} entre km {km_start} et km {km_end}",
+        14,
+    ),
+    # --- Inspect-ctrl (~20% cible) ---
+    (
+        "Inspection des {element} à la volée entre le km {km_start} et le km {km_end}, sans contrôle des mesures par le robot",
+        10,
+    ),
+    (
+        "Parcours d'acquisition des {element} entre km {km_start} et km {km_end}. Les mesures seront prises à la volée sans être contrôlées",
+        10,
+    ),
 ]
 
 INSPECTION_ELEMENTS = [
@@ -231,16 +255,25 @@ INSPECTION_ELEMENTS = [
 ]
 
 
-def random_mission() -> str:
-    """Génère une instruction de mission aléatoire."""
-    cat = random.choice(MISSION_CATEGORIES)
-    return cat.format(
-        km=random.randint(1, 50),
-        km_start=random.randint(1, 25),
-        km_mid=random.randint(26, 35),
-        km_end=random.randint(36, 50),
-        element=random.choice(INSPECTION_ELEMENTS),
-    )
+def random_mission(seen: set | None = None, max_reroll: int = 200) -> str:
+    """Génère une instruction de mission aléatoire, unique si `seen` est fourni."""
+    templates = [t for t, _ in MISSION_CATEGORIES]
+    weights = [w for _, w in MISSION_CATEGORIES]
+    for _ in range(max_reroll):
+        cat = random.choices(templates, weights=weights, k=1)[0]
+        mission = cat.format(
+            km=random.randint(1, 50),
+            km_start=random.randint(1, 25),
+            km_mid=random.randint(26, 35),
+            km_end=random.randint(36, 50),
+            element=random.choice(INSPECTION_ELEMENTS),
+        )
+        if seen is None or mission not in seen:
+            if seen is not None:
+                seen.add(mission)
+            return mission
+    # Fallback : retourner quand même (ne devrait pas arriver avec 12k+ combos)
+    return mission
 
 
 def classify_mission(instruction: str) -> str:
@@ -259,19 +292,24 @@ def classify_mission(instruction: str) -> str:
             "pas de controle",
         ]
     )
-    has_inspect = not no_measure and any(
-        w in text
-        for w in [
-            "inspection",
-            "inspecter",
-            "mesure",
-            "mesurer",
-            "mesures",
-            "vérifier",
-            "contrôler",
-            "défaut",
-            "anomalie",
-        ]
+    # "correction" et "anomalie" seuls = transport correctif, pas inspection
+    is_correction = any(w in text for w in ["correction", "corriger"])
+    has_inspect = (
+        not no_measure
+        and not is_correction
+        and any(
+            w in text
+            for w in [
+                "inspection",
+                "inspecter",
+                "mesure",
+                "mesurer",
+                "mesures",
+                "vérifier",
+                "contrôler",
+                "défaut",
+            ]
+        )
     )
     no_control = any(
         w in text
@@ -343,12 +381,14 @@ class GraphState(TypedDict):
 # ─── Nœuds du graphe ─────────────────────────────────────────────────────────
 
 
-def make_nodes(llm: ChatOpenAI, llm_creative: ChatOpenAI):
+def make_nodes(
+    llm: ChatOpenAI, llm_creative: ChatOpenAI, seen_missions: set | None = None
+):
     """Crée les fonctions nœuds du graphe avec les LLM injectés."""
 
     def node_generate_instruction(state: GraphState) -> dict:
-        """Génère une instruction de mission aléatoire."""
-        mission = random_mission()
+        """Génère une instruction de mission aléatoire unique."""
+        mission = random_mission(seen=seen_missions)
         return {
             "instruction": mission,
             "iterations": 0,
@@ -377,11 +417,25 @@ def make_nodes(llm: ChatOpenAI, llm_creative: ChatOpenAI):
             )
         else:
             n_subtrees = len(mission_guidance.split("\n- ")) - 1
+            # Directives de variété aléatoires
+            variation_hints = random.choice(
+                [
+                    "Utilise des name= descriptifs et specifiques a cette mission.",
+                    "Ajoute un commentaire XML en debut decrivant la mission et ses parametres.",
+                    "Varie les durees de Pause si tu en utilises (entre 1.0 et 5.0 secondes).",
+                    "Le message de SignalAndWaitForOrder doit etre specifique a cette mission.",
+                    "Tu peux omettre pass(type=3) si la mission ne necessite pas de passage sans arret.",
+                    "Tu peux omettre reach_stop_no_wait(type=4) si tous les arrets necessitent une attente.",
+                    "Ajoute une Pause apres LoadMission pour simuler le chargement.",
+                    "Utilise des noms de variables blackboard evocateurs pour cette mission.",
+                ]
+            )
             user_prompt = (
                 f"Mission : {instruction}\n{mission_guidance}\n\n"
                 f"Genere le XML complet. Tu DOIS inclure les {n_subtrees} motion subtrees "
                 f"ci-dessus comme BehaviorTree separes, chacun reference par SubTreePlus "
-                f"dans le Fallback MOTION SELECTOR. "
+                f"dans le Fallback MOTION SELECTOR.\n"
+                f"{variation_hints}\n"
                 f"Renvoie UNIQUEMENT le XML."
             )
 
@@ -480,8 +534,10 @@ def route_after_validation(state: GraphState) -> str:
 # ─── Construction du graphe ──────────────────────────────────────────────────
 
 
-def build_graph(llm: ChatOpenAI, llm_creative: ChatOpenAI) -> StateGraph:
-    gen_instr, gen_xml, validate = make_nodes(llm, llm_creative)
+def build_graph(
+    llm: ChatOpenAI, llm_creative: ChatOpenAI, seen_missions: set | None = None
+) -> StateGraph:
+    gen_instr, gen_xml, validate = make_nodes(llm, llm_creative, seen_missions)
 
     workflow = StateGraph(GraphState)
     workflow.add_node("generate_instruction", gen_instr)
@@ -514,9 +570,6 @@ def generate_dataset(app, count: int, output_path: Path, resume: bool = False) -
                 if line:
                     samples.append(json.loads(line))
                     start += 1
-        # Avancer le RNG pour rester cohérent avec la seed
-        for _ in range(start):
-            random_mission()
         print(
             f"\u21bb Reprise : {start} samples existants, génération de {count - start} restants"
         )
@@ -623,6 +676,16 @@ def main():
         ts = datetime.now().strftime("%Y%m%d_%H%M")
         args.output = f"dataset_nav4rail_llm_{args.count}_{ts}.jsonl"
 
+    # Déduplication : charger les missions existantes si reprise
+    seen_missions = set()
+    if args.resume and Path(args.output).exists():
+        with open(args.output, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    seen_missions.add(json.loads(line)["mission"])
+        print(f"🔑 {len(seen_missions)} missions uniques chargées pour dédup")
+
     print(f"🔧 Config: url={args.url} model={args.model} count={args.count}")
     print(f"📁 Output: {args.output}")
 
@@ -630,7 +693,7 @@ def main():
         model=args.model,
         openai_api_base=args.url,
         openai_api_key="sk-no-key-required",
-        temperature=0.1,
+        temperature=0.6,
         max_tokens=4096,
     )
     llm_creative = ChatOpenAI(
@@ -641,7 +704,7 @@ def main():
         max_tokens=256,
     )
 
-    app = build_graph(llm, llm_creative)
+    app = build_graph(llm, llm_creative, seen_missions)
     stats = generate_dataset(app, args.count, Path(args.output), resume=args.resume)
 
     print(f"\n{'=' * 60}")
