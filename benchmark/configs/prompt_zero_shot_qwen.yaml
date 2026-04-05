@@ -1,13 +1,14 @@
-name: nav4rail_zero_shot
+name: nav4rail_zero_shot_qwen
 task: xml_generation
 output_root: runs
 method: zero_shot
 catalog_path: data/nav4rail_catalog_merged.json
 xsd_path: null
 model:
-  model_name_or_path: mistralai/Mistral-7B-Instruct-v0.3
+  model_name_or_path: Qwen/Qwen2.5-7B-Instruct
   dtype: bf16
   quantization: 4bit
+  trust_remote_code: true
 prompt:
   mode: zero_shot
   few_shot_k: 0
