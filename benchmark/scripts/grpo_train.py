@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import random
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +18,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--kl-coef", type=float, default=0.02)
     p.add_argument("--output-root", type=str, default=None, help="Override config.output_root.")
+    p.add_argument(
+        "--adapter",
+        type=str,
+        default=None,
+        help="Optional PEFT adapter path (e.g. SFT LoRA) to initialize trainable policy and frozen ref.",
+    )
     return p.parse_args()
 
 
@@ -53,10 +58,20 @@ def main() -> int:
     cfg = load_experiment_config(Path(args.config))
     if args.output_root:
         cfg.output_root = str(Path(args.output_root))
+    if args.adapter:
+        cfg.peft.adapter_path = args.adapter
 
     # Run dir & basic bookkeeping
     paths = create_run_paths(cfg.output_root)
     paths.experiment_json.write_text(Path(args.config).read_text(encoding="utf-8"), encoding="utf-8")
+    from src.evaluation.run_manifest import write_manifest_for_run
+
+    write_manifest_for_run(
+        paths,
+        config_path=Path(args.config).resolve(),
+        cfg=cfg,
+        extra={"adapter_cli": args.adapter, "prompts_file": args.prompts, "script": "grpo_train.py"},
+    )
 
     catalog = load_catalog(cfg.catalog_path or default_catalog_path())
     system_prompt = render_system_prompt(catalog, include_schema=cfg.prompt.include_schema)
@@ -100,15 +115,18 @@ def main() -> int:
 
             for gi in range(args.group_size):
                 with torch.no_grad():
-                    gen_out = model.generate(
-                        input_ids=prompt_ids,
-                        max_new_tokens=cfg.generation.max_new_tokens,
-                        do_sample=cfg.generation.do_sample,
-                        temperature=cfg.generation.temperature,
-                        top_p=cfg.generation.top_p,
-                        pad_token_id=getattr(tokenizer, "pad_token_id", None),
-                        eos_token_id=getattr(tokenizer, "eos_token_id", None),
-                    )
+                    gen_kwargs: dict[str, Any] = {
+                        "input_ids": prompt_ids,
+                        "max_new_tokens": cfg.generation.max_new_tokens,
+                        "do_sample": cfg.generation.do_sample,
+                        "temperature": cfg.generation.temperature,
+                        "top_p": cfg.generation.top_p,
+                        "pad_token_id": getattr(tokenizer, "pad_token_id", None),
+                        "eos_token_id": getattr(tokenizer, "eos_token_id", None),
+                    }
+                    if getattr(cfg.generation, "top_k", -1) is not None and int(cfg.generation.top_k) > 0:
+                        gen_kwargs["top_k"] = int(cfg.generation.top_k)
+                    gen_out = model.generate(**gen_kwargs)
                 full = gen_out[0]
                 gen_ids = full[prompt_len:]
                 text = tokenizer.decode(gen_ids, skip_special_tokens=True)

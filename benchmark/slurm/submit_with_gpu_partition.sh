@@ -5,8 +5,9 @@
 #   ./slurm/submit_with_gpu_partition.sh slurm/sft_lora.slurm
 #
 # Env:
-#   GPU_PARTITION_ORDER — space-separated list tried in order (default: 3090 H100 P100)
+#   GPU_PARTITION_ORDER — space-separated list tried in order (default: P100 3090 H100)
 #   First partition that exists in `sinfo` is used via: sbatch --partition=<p> <jobfile>
+#   Partition names are cluster-specific and case-sensitive; verify with: sinfo -s
 #
 # If no partition matches, falls back to plain: sbatch <jobfile> (uses #SBATCH in file).
 #
@@ -20,7 +21,7 @@ if [[ ! -f "$JOBFILE" ]]; then
   exit 1
 fi
 
-ORDER="${GPU_PARTITION_ORDER:-3090 H100 P100}"
+ORDER="${GPU_PARTITION_ORDER:-P100 3090 H100}"
 for p in $ORDER; do
   if sinfo -p "$p" -h 2>/dev/null | grep -q .; then
     echo "[submit] sbatch --partition=$p $JOBFILE"

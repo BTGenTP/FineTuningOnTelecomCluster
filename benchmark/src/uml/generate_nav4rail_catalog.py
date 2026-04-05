@@ -12,8 +12,10 @@ if __package__ in (None, ""):
     if str(benchmark_root) not in sys.path:
         sys.path.insert(0, str(benchmark_root))
     from src.uml.catalog_generator import build_catalog_from_uml, write_catalog  # type: ignore
+    from src.uml.external_catalog_merge import merge_bt_navigator_port_semantics  # type: ignore
 else:
     from .catalog_generator import build_catalog_from_uml, write_catalog
+    from .external_catalog_merge import merge_bt_navigator_port_semantics
 
 
 def parse_args() -> argparse.Namespace:
@@ -21,6 +23,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--nav4rails-repo", required=True, type=str, help="Path to nav4rails_repo root.")
     p.add_argument("--output", required=True, type=str, help="Output JSON path.")
     p.add_argument("--constraints-dir", default=None, type=str, help="Optional constraints directory for enums/tag overrides.")
+    p.add_argument(
+        "--bt-navigator-catalog",
+        default=None,
+        type=str,
+        help="Optional BT_Navigator-style JSON (e.g. BT_Navigator/script/bt_nodes_catalog.json) to merge port_semantics into output.",
+    )
     return p.parse_args()
 
 
@@ -83,6 +91,8 @@ def main() -> int:
         behaviortreeschema_paths=schemas,
         constraints_dir=args.constraints_dir,
     )
+    if args.bt_navigator_catalog:
+        merge_bt_navigator_port_semantics(catalog, Path(args.bt_navigator_catalog))
     out = write_catalog(args.output, catalog)
     print(f"Wrote: {out}")
     print(f"Skills files: {len(skills)} | behaviortreeschema files: {len(schemas)} | skills in catalog: {len(catalog.get('atomic_skills', []))}")

@@ -2,7 +2,7 @@
 #SBATCH --job-name=nav4rail_dpo
 #SBATCH --output=runs/slurm/%x_%j.out
 #SBATCH --error=runs/slurm/%x_%j.err
-#SBATCH --partition=3090
+#SBATCH --partition=P100
 #SBATCH --gres=gpu:1
 #SBATCH --time=08:00:00
 #SBATCH --cpus-per-task=8
@@ -28,7 +28,7 @@ fi
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/_telecom_env.sh"
 
-CONFIG="${CONFIG:-configs/dpo.yaml}"
+CONFIG="${CONFIG:-configs/dpo_p100.yaml}"
 OUTROOT="${OUTROOT:-runs/slurm/${SLURM_JOB_NAME}_${SLURM_JOB_ID}}"
 PROMPTS="${PROMPTS:-}"
 N="${N:-50}"

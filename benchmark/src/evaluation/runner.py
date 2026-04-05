@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from ..contracts import ExperimentConfig, RunPaths
+from .run_manifest import write_manifest_for_run
 from ..data.catalog import default_catalog_path, load_catalog
 from ..evaluation.metrics import build_metrics_row, render_markdown_table, write_reports
 from ..methods.prompting import render_prompt_bundle
@@ -46,6 +47,7 @@ def create_run_paths(output_root: str | Path) -> RunPaths:
         validation_report_json=run_dir / "validation_report.json",
         metrics_json=run_dir / "metrics.json",
         summary_md=run_dir / "summary.md",
+        run_manifest_json=run_dir / "run_manifest.json",
     )
 
 
@@ -76,8 +78,12 @@ class ExperimentRunner:
         generate_fn: Callable[[list[dict[str, str]]], str],
         reference_xml: Optional[str] = None,
         few_shot_examples: Sequence[Any] = (),
+        config_path: Optional[Path] = None,
+        manifest_extra: Optional[Mapping[str, Any]] = None,
     ) -> dict[str, Any]:
         paths = create_run_paths(self.config.output_root)
+        if config_path is not None:
+            write_manifest_for_run(paths, config_path=config_path, cfg=self.config, extra=manifest_extra)
         prompt_bundle = render_prompt_bundle(
             mission=mission,
             catalog=self.catalog,
@@ -123,8 +129,16 @@ class ExperimentRunner:
         paths.summary_md.write_text(render_markdown_table([metrics]) + "\n", encoding="utf-8")
         return {"run_dir": str(paths.run_dir), "metrics": metrics, "validation": report.to_dict()}
 
-    def run_sft_experiment(self, train_rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    def run_sft_experiment(
+        self,
+        train_rows: Sequence[Mapping[str, Any]],
+        *,
+        config_path: Optional[Path] = None,
+        manifest_extra: Optional[Mapping[str, Any]] = None,
+    ) -> dict[str, Any]:
         paths = create_run_paths(self.config.output_root)
+        if config_path is not None:
+            write_manifest_for_run(paths, config_path=config_path, cfg=self.config, extra=manifest_extra)
         result = run_sft(self.config, train_rows, self.catalog)
         _write_json(paths.experiment_json, asdict(self.config))
         _write_json(paths.metrics_json, result)
@@ -175,8 +189,16 @@ class ExperimentRunner:
         paths.summary_md.write_text(render_markdown_table(rows) + "\n", encoding="utf-8")
         return {"run_dir": str(paths.run_dir), "steps": rows}
 
-    def run_dpo_experiment(self, preference_pairs: Sequence[PreferencePair]) -> dict[str, Any]:
+    def run_dpo_experiment(
+        self,
+        preference_pairs: Sequence[PreferencePair],
+        *,
+        config_path: Optional[Path] = None,
+        manifest_extra: Optional[Mapping[str, Any]] = None,
+    ) -> dict[str, Any]:
         paths = create_run_paths(self.config.output_root)
+        if config_path is not None:
+            write_manifest_for_run(paths, config_path=config_path, cfg=self.config, extra=manifest_extra)
         result = run_dpo(self.config, preference_pairs)
         _write_json(paths.experiment_json, asdict(self.config))
         _write_json(paths.metrics_json, result)

@@ -111,6 +111,7 @@ class GenerationConfig:
     max_new_tokens: int = 1024
     temperature: float = 0.0
     top_p: float = 1.0
+    top_k: int = -1
     do_sample: bool = False
 
 
@@ -141,3 +142,4 @@ class RunPaths:
     validation_report_json: Path
     metrics_json: Path
     summary_md: Path
+    run_manifest_json: Path

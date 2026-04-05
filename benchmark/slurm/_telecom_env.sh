@@ -6,6 +6,8 @@
 # Optional env:
 #   BENCHMARK_ROOT_OVERRIDE  — if set, cd here instead of auto-detected benchmark root (e.g. ~/benchmark)
 #   BENCHMARK_VENV           — venv path (default: $BENCHMARK_ROOT/.venv)
+#   BENCHMARK_GPU_PROFILE    — force: p100 | auto (default auto: detect from nvidia-smi / SLURM_JOB_PARTITION)
+#   TORCH_CUDA_ARCH_LIST     — only for building PyTorch from source; e.g. 6.0 for Pascal (P100)
 
 set -euo pipefail
 
@@ -21,11 +23,41 @@ cd "$BENCHMARK_ROOT"
 echo "[job] BENCHMARK_ROOT=$BENCHMARK_ROOT"
 echo "[job] host=$(hostname) jobid=${SLURM_JOB_ID:-unknown} date=$(date -Iseconds)"
 
+# --- Slurm / run metadata (also persisted in run_manifest.json by Python jobs) ---
+echo "[job] manifest_kv SLURM_JOB_PARTITION=${SLURM_JOB_PARTITION:-}"
+echo "[job] manifest_kv SLURM_JOB_ID=${SLURM_JOB_ID:-}"
+echo "[job] manifest_kv SLURM_GPUS_ON_NODE=${SLURM_GPUS_ON_NODE:-}"
+echo "[job] manifest_kv SLURM_STEP_GPUS=${SLURM_STEP_GPUS:-}"
+echo "[job] manifest_kv SLURM_SUBMIT_DIR=${SLURM_SUBMIT_DIR:-}"
+
 # Cluster modules (Telecom Paris)
 if command -v module >/dev/null 2>&1; then
   module load python/3.11.13 cuda/12.4.1 2>/dev/null \
     || module load python/3.11.13 2>/dev/null \
     || true
+fi
+
+# GPU profile: P100 (Pascal) prefers fp16 and no 4-bit; wheels still include sm_60 kernels.
+export BENCHMARK_GPU_PROFILE="${BENCHMARK_GPU_PROFILE:-auto}"
+_GPU_LINE=""
+if command -v nvidia-smi >/dev/null 2>&1; then
+  _GPU_LINE="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || true)"
+fi
+if [[ "$BENCHMARK_GPU_PROFILE" == "auto" ]]; then
+  if [[ "${SLURM_JOB_PARTITION:-}" =~ [Pp]100 ]] || [[ "${_GPU_LINE:-}" == *"P100"* ]]; then
+    BENCHMARK_GPU_PROFILE="p100"
+  else
+    BENCHMARK_GPU_PROFILE="generic"
+  fi
+fi
+export BENCHMARK_GPU_PROFILE
+if [[ "$BENCHMARK_GPU_PROFILE" == "p100" ]]; then
+  export BENCHMARK_FP16="${BENCHMARK_FP16:-1}"
+  export BENCHMARK_DISABLE_4BIT="${BENCHMARK_DISABLE_4BIT:-1}"
+  echo "[job] BENCHMARK_GPU_PROFILE=p100 BENCHMARK_FP16=1 BENCHMARK_DISABLE_4BIT=1"
+  echo "[job] note: TORCH_CUDA_ARCH_LIST=6.0 only if compiling PyTorch from source (optional)."
+else
+  echo "[job] BENCHMARK_GPU_PROFILE=$BENCHMARK_GPU_PROFILE"
 fi
 
 if command -v nvidia-smi >/dev/null 2>&1; then
@@ -73,5 +105,16 @@ if ! python3 -c "import yaml, torch, transformers, trl; import src.config_loader
   python3 -c "import yaml, torch, transformers, trl; import src.config_loader" || true
   exit 1
 fi
+
+python3 << 'PY'
+import os
+import torch
+print("[job] manifest_kv torch_version=" + torch.__version__)
+print("[job] manifest_kv cuda_version_torch=" + (torch.version.cuda or ""))
+if torch.cuda.is_available():
+    print("[job] manifest_kv cuda_device_name=" + torch.cuda.get_device_name(0))
+else:
+    print("[job] manifest_kv cuda_device_name=")
+PY
 
 echo "[job] prerequisites OK"

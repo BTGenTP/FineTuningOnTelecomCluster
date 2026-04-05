@@ -1,0 +1,5 @@
+# Optional PyTorch alignment for Pascal (P100, sm_60): install base deps first:
+#   pip install -r requirements.txt
+# Then, if needed, reinstall torch to match cluster CUDA (example CUDA 11.8 wheels):
+#   pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+# Verify: python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"

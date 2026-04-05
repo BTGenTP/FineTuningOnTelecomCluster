@@ -3,18 +3,8 @@ description: "NAV4RAIL macro-skill patterns (design patterns) used for prompting
 
 patterns:
   PreparationPattern:
-    description: "Preparation sequence must build mission -> validate -> project -> path -> aggregate -> pass -> generate sequence."
-    required_sequence:
-      - { tag: Action, id: LoadMission }
-      - { tag: Condition, id: MissionStructureValid }
-      - { tag: Action, id: UpdateCurrentGeneratedActivity }
-      - { tag: Action, id: ProjectPointOnNetwork }
-      - { tag: Action, id: ProjectPointOnNetwork }
-      - { tag: Action, id: CreatePath }
-      - { tag: Action, id: AgregatePath }
-      - { tag: Action, id: PassAdvancedPath }
-      - { tag: Action, id: PassMission }
-      - { tag: Action, id: GenerateMissionSequence }
+    description: "Optional strict preparation subsequence (disabled by default; enable for synthetic-benchmark trees only)."
+    required_sequence: []
 
   ExecutionLoopPattern:
     description: "Execution loop must be ReactiveFallback with Repeat(num_cycles=-1) and MissionTerminated."
@@ -38,16 +28,9 @@ patterns:
       values: ["10", "11", "12", "13", "14"]
     required_subsequence:
       - { tag: Action, id: PassMotionParameters }
-      - { tag: Action, id: ManageMeasurements, attrs: { mode: "start" } }
+      - { tag: Action, id: ManageMeasurements }
       - { tag: Action, id_any_of: [Move, Deccelerate, MoveAndStop] }
-      - { tag: Action, id: ManageMeasurements, attrs: { mode: "stop" } }
+      - { tag: Action, id: ManageMeasurements }
       - { tag: Action, id: AnalyseMeasurements }
-    required_fallback:
-      tag: Fallback
-      must_contain_any:
-        - { tag: Condition, id: MeasurementsQualityValidated }
-        - { tag: Condition, id: MeasurementsEnforcedValidated }
-      corrective_branch_must_contain:
-        - { tag: Action, id: GenerateCorrectiveSubSequence }
-        - { tag: Action, id: InsertCorrectiveSubSequence }
+    required_fallback: {}
 

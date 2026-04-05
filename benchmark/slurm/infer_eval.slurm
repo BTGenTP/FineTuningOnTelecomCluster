@@ -2,7 +2,7 @@
 #SBATCH --job-name=nav4rail_infer_eval
 #SBATCH --output=runs/slurm/%x_%j.out
 #SBATCH --error=runs/slurm/%x_%j.err
-#SBATCH --partition=3090
+#SBATCH --partition=P100
 #SBATCH --gres=gpu:1
 #SBATCH --time=02:00:00
 #SBATCH --cpus-per-task=8

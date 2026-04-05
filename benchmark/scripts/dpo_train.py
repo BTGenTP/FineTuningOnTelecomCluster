@@ -59,8 +59,12 @@ def main() -> int:
     rejected_cfg = load_experiment_config(Path(args.config))  # fresh copy
     if args.chosen_adapter:
         chosen_cfg.peft.adapter_path = args.chosen_adapter
+        if not chosen_cfg.peft.method:
+            chosen_cfg.peft.method = "lora"
     if args.rejected_adapter:
         rejected_cfg.peft.adapter_path = args.rejected_adapter
+        if not rejected_cfg.peft.method:
+            rejected_cfg.peft.method = "lora"
     else:
         rejected_cfg.peft.adapter_path = None
 
@@ -81,6 +85,7 @@ def main() -> int:
             max_new_tokens=cfg.generation.max_new_tokens,
             temperature=cfg.generation.temperature,
             top_p=cfg.generation.top_p,
+            top_k=cfg.generation.top_k,
             do_sample=cfg.generation.do_sample,
         )
         return extract_root_xml(raw) or raw.strip()
@@ -107,7 +112,15 @@ def main() -> int:
     )
 
     runner = ExperimentRunner(cfg)
-    res = runner.run_dpo_experiment(preference_pairs=pairs)
+    res = runner.run_dpo_experiment(
+        preference_pairs=pairs,
+        config_path=Path(args.config).resolve(),
+        manifest_extra={
+            "chosen_adapter": args.chosen_adapter,
+            "rejected_adapter": args.rejected_adapter,
+            "prompts_file": args.prompts,
+        },
+    )
     print("run_dir:", res["run_dir"])
     print("training:", res["training"])
     return 0

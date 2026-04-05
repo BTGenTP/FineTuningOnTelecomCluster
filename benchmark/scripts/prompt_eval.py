@@ -83,9 +83,12 @@ def main() -> int:
                 max_new_tokens=cfg.generation.max_new_tokens,
                 temperature=cfg.generation.temperature,
                 top_p=cfg.generation.top_p,
+                top_k=cfg.generation.top_k,
                 do_sample=cfg.generation.do_sample,
             ),
             few_shot_examples=examples,
+            config_path=Path(args.config).resolve(),
+            manifest_extra={"missions_file": args.missions, "fewshot_pool": args.fewshot_pool},
         )
         rows.append(result["metrics"])
 

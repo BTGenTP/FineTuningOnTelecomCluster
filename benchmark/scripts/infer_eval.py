@@ -66,8 +66,11 @@ def main() -> int:
                 max_new_tokens=cfg.generation.max_new_tokens,
                 temperature=cfg.generation.temperature,
                 top_p=cfg.generation.top_p,
+                top_k=cfg.generation.top_k,
                 do_sample=cfg.generation.do_sample,
             ),
+            config_path=Path(args.config).resolve(),
+            manifest_extra={"adapter_cli": args.adapter, "missions_file": args.missions},
         )
         rows.append(result["metrics"])
 

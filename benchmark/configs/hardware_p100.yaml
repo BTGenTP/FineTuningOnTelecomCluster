@@ -1,0 +1,5 @@
+# Reference only — not loaded by config_loader. Use task-specific `*_p100.yaml` configs.
+# P100 (Pascal): fp16, quantization null; align `generation` across methods for phase 1.
+_meta:
+  hardware_profile: p100
+  note: "See README (P100, phase 1 vs 2, shared evaluation JSONL)"

@@ -22,7 +22,7 @@ def _torch_dtype(name: str) -> Any:
     return getattr(torch, DTYPE_MAP.get(name, "bfloat16"))
 
 
-def build_quantization_config(mode: Optional[str]) -> Any:
+def build_quantization_config(mode: Optional[str], *, compute_dtype: Any) -> Any:
     if not mode:
         return None
     from transformers import BitsAndBytesConfig
@@ -35,7 +35,7 @@ def build_quantization_config(mode: Optional[str]) -> Any:
         return BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_compute_dtype=compute_dtype,
             bnb_4bit_use_double_quant=True,
         )
     raise ValueError(f"Unsupported quantization mode: {mode}")
@@ -57,12 +57,13 @@ def load_tokenizer(config: ModelConfig) -> Any:
 def load_base_model(config: ModelConfig) -> Any:
     from transformers import AutoModelForCausalLM
 
+    torch_dtype = _torch_dtype(config.dtype)
     kwargs = {
         "device_map": config.device_map,
-        "torch_dtype": _torch_dtype(config.dtype),
+        "torch_dtype": torch_dtype,
         "trust_remote_code": config.trust_remote_code,
     }
-    quantization_config = build_quantization_config(config.quantization)
+    quantization_config = build_quantization_config(config.quantization, compute_dtype=torch_dtype)
     if quantization_config is not None:
         kwargs["quantization_config"] = quantization_config
     if config.use_flash_attention:

@@ -43,6 +43,10 @@ def _strictness_rank(attr_type: str) -> int:
         return 3
     if t in {"blackboard_port_input", "blackboard_port_output"}:
         return 2
+    if t in {"integer_or_blackboard", "float_or_blackboard", "unsigned_int_or_blackboard", "double_or_blackboard"}:
+        return 2
+    if t == "subtree_port_remapping":
+        return 1
     if t == "string_or_blackboard":
         return 1
     if t == "string":

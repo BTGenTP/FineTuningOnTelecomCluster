@@ -62,6 +62,7 @@ Each benchmark run writes:
 - `validation_report.json`
 - `metrics.json`
 - `summary.md`
+- `run_manifest.json` — Slurm env, SHA256 of the YAML config, `torch`/`CUDA` versions, optional `git` commit, adapter paths / CLI overrides (`extra`), and `metadata.phase` when set in the config
 
 `llm_output_raw.txt` is kept as raw model output (only a trailing newline is ensured). `generated_bt.xml` is a pretty-printed canonical XML with newlines.
 
@@ -76,7 +77,11 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-The PyPI package for `import yaml` is **`pyyaml`** (not `yaml`). It is listed in `requirements.txt`.
+Optional notes for **NVIDIA P100 (Pascal, sm_60)**:
+
+- Prefer **`dtype: fp16`** and **`quantization: null`** in YAML (see `configs/*_p100.yaml` and `configs/hardware_p100.yaml` comments). Avoid **bf16** on P100 for training; **4-bit** via bitsandbytes is often unreliable on Pascal.
+- After base deps: see **`requirements-p100.txt`** for an example `pip install torch ... --index-url` line aligned with your cluster CUDA module.
+- Slurm jobs source **`slurm/_telecom_env.sh`**, which sets `BENCHMARK_GPU_PROFILE` / `BENCHMARK_FP16` when a P100 is detected and prints `manifest_kv` lines for logs.
 
 ### 1) Regenerate the UML-derived catalog snapshot (optional)
 
@@ -86,6 +91,18 @@ python3 src/uml/generate_nav4rail_catalog.py \
   --output data/nav4rail_skills_from_uml.json \
   --constraints-dir constraints
 ```
+
+Optional: enrich skills with **named ports** from `BT_Navigator/script/bt_nodes_catalog.json` (adds `port_semantics` per skill when IDs match; validator types stay on the base catalog):
+
+```bash
+python3 src/uml/generate_nav4rail_catalog.py \
+  --nav4rails-repo ../../../nav4rails_repo \
+  --output data/nav4rail_skills_from_uml.json \
+  --constraints-dir constraints \
+  --bt-navigator-catalog ../../../repositories/BT_Navigator/script/bt_nodes_catalog.json
+```
+
+SubTreePlus remapping and ordre `adv_path` : voir `examples/bt_subtree_ports_and_adv_path.md`.
 
 ### 1b) Merge UML snapshot into the benchmark catalog (recommended)
 
@@ -110,6 +127,10 @@ python3 scripts/generate_synthetic_dataset.py --n 100 --output data/dataset_synt
 python3 scripts/validate_bt_xml.py
 # Or a specific file:
 python3 scripts/validate_bt_xml.py --xml path/to/mission.xml --catalog data/nav4rail_catalog_merged.json
+# Write JSON report with a fixed date (metadata + filename):
+python3 scripts/validate_bt_xml.py --xml real_inspection_mission.xml --write-report runs/validation_reports --report-date 2026-04-05
+# Or a concrete file path (with --report-date, inserts _YYYY-MM-DD before .json):
+python3 scripts/validate_bt_xml.py --xml real_inspection_mission.xml --write-report /tmp/report.json --report-date 2026-04-05
 ```
 
 ### 4) Run prompt-based benchmark (smoke: replay XML)
@@ -128,7 +149,7 @@ Chaque job **source** `slurm/_telecom_env.sh`, qui :
 
 - charge les modules si `module` est disponible ;
 - active le venv (`BENCHMARK_VENV` ou `.venv` sous la racine benchmark) ;
-- exécute `pip install -r requirements.txt` (dont **PyYAML**) ;
+- exécute `pip install -r requirements.txt`;
 - vérifie `import yaml`, `torch`, `transformers`, `trl`, `src.config_loader` avant le script Python.
 
 Variables utiles :
@@ -137,6 +158,8 @@ Variables utiles :
 |----------|------|
 | `BENCHMARK_ROOT_OVERRIDE` | Si le dépôt est copié ailleurs (ex. `~/benchmark`), chemin absolu vers la racine `benchmark/` |
 | `BENCHMARK_VENV` | Chemin du venv (défaut : `$BENCHMARK_ROOT/.venv`) |
+| `BENCHMARK_GPU_PROFILE` | `auto` (défaut), `p100`, ou `generic` — forcé par `_telecom_env.sh` si partition Slurm / `nvidia-smi` indique un P100 |
+| `GPU_PARTITION_ORDER` | Pour `submit_with_gpu_partition.sh` : ordre des partitions essayées (défaut : `P100 3090 H100`) |
 
 Soumission directe :
 
@@ -152,7 +175,7 @@ Choix de partition GPU (ex. **3090** indisponible → **H100** si présent sur v
 
 ```bash
 chmod +x slurm/submit_with_gpu_partition.sh
-GPU_PARTITION_ORDER="3090 H100 P100" ./slurm/submit_with_gpu_partition.sh slurm/sft_lora.slurm
+GPU_PARTITION_ORDER="P100 3090 H100" ./slurm/submit_with_gpu_partition.sh slurm/sft_lora.slurm
 ```
 
 Jobs disponibles : `slurm/prompt_eval.slurm`, `slurm/sft_lora.slurm`, `slurm/infer_eval.slurm`, `slurm/dpo.slurm`, `slurm/grpo.slurm`, `slurm/ppo.slurm`.
@@ -187,6 +210,21 @@ python3 scripts/dpo_train.py --config configs/dpo.yaml --n 50 --output-root runs
 python3 scripts/grpo_train.py --config configs/grpo.yaml --n 50 --group-size 4 --epochs 1 --output-root runs/grpo
 python3 scripts/ppo_train.py  --config configs/ppo.yaml  --n 20 --epochs 1 --output-root runs/ppo
 ```
+
+### Phase 1 (protocole fixe) vs phase 2 (réglage d’hyperparamètres)
+
+- **Phase 1** : un même `model_name_or_path`, des configs `*_p100.yaml` (ou équivalent), un **JSONL de missions partagé** (`--prompts` / `--missions`), des **hyperparamètres de décodage identiques** dans `generation` (`temperature`, `top_p`, `top_k`, `max_new_tokens`, `do_sample`). La **récompense** est le **validateur XML déterministe** (`reward_from_xml`) — pas de « reward model » neuronal ; seule la **génération** est stochastique.
+- **Phase 2** : copier les YAML (ex. `configs/sweeps/`) ou dupliquer avec un champ `metadata.phase: 2` et `parent_run_id` dans le manifest ; ne pas mélanger les sorties `runs/` des deux phases.
+
+### Chaînage SFT → RL (Slurm)
+
+- **SFT** : `sbatch slurm/sft_lora.slurm` (défaut `CONFIG=configs/sft_lora_p100.yaml`).
+- **PPO / GRPO** : après SFT, exporter le chemin des adaptateurs (ex. `artifacts/sft_lora`) et lancer avec `SFT_ADAPTER=/path/to/adapter sbatch slurm/ppo.slurm` ou `... grpo.slurm` (les scripts passent `--adapter`).
+- **DPO** : `CHOSEN_ADAPTER=/path/to/sft_adapter sbatch slurm/dpo.slurm` (rejeté = base si `REJECTED_ADAPTER` vide).
+
+### Comparaison équitable
+
+Utiliser le **même fichier de missions** et la **même section `generation`** pour `infer_eval.py` / `prompt_eval.py` afin que seuls le modèle et l’adaptateur changent entre méthodes.
 
 ### 6) Export reports
 

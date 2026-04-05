@@ -176,6 +176,18 @@ def _check_attr_type(expected: str, value: str) -> bool:
         return value == expected.removeprefix("const:")
     if expected in {"blackboard_port_input", "blackboard_port_output"}:
         return _extract_bb_var(value) is not None
+    if expected in {"integer_or_blackboard", "unsigned_int_or_blackboard"}:
+        return _extract_bb_var(value) is not None or re.fullmatch(r"-?\d+", (value or "").strip()) is not None
+    if expected in {"float_or_blackboard", "double_or_blackboard"}:
+        if _extract_bb_var(value) is not None:
+            return True
+        try:
+            float((value or "").strip())
+            return True
+        except ValueError:
+            return False
+    if expected == "subtree_port_remapping":
+        return True
     if expected == "string_or_blackboard":
         return True
     if expected.startswith("enum:") and "optional" in expected:
@@ -238,6 +250,40 @@ def _behavior_tree_body(bt: ET.Element) -> Optional[ET.Element]:
     return children[0] if children else None
 
 
+def _collect_behavior_tree_produced(
+    bt: ET.Element,
+    skill_specs: Mapping[str, Any],
+    bt_defs: Mapping[str, ET.Element],
+) -> Set[str]:
+    """Union of blackboard keys produced anywhere inside this BehaviorTree (incl. nested SubTreePlus)."""
+    out: Set[str] = set()
+    body = _behavior_tree_body(bt)
+    if body is None:
+        return out
+    stack: List[ET.Element] = [body]
+    while stack:
+        node = stack.pop()
+        if node.tag == "SubTreePlus":
+            sid = node.attrib.get("ID")
+            if sid and sid in bt_defs:
+                out |= _collect_behavior_tree_produced(bt_defs[sid], skill_specs, bt_defs)
+            continue
+        if _is_skill_node(node):
+            sk = node.attrib.get("ID", "")
+            spec = skill_specs.get(sk)
+            if spec is not None:
+                for o in spec.blackboard_outputs:
+                    out.add(o)
+                for an, at in spec.attributes.items():
+                    if at == "blackboard_port_output" and an in node.attrib:
+                        bb = _extract_bb_var(node.attrib[an])
+                        if bb:
+                            out.add(bb)
+        for c in list(node):
+            stack.append(c)
+    return out
+
+
 def _sequence_blackboard_check(
     sequence_node: ET.Element,
     parent_map: Mapping[ET.Element, ET.Element],
@@ -246,15 +292,18 @@ def _sequence_blackboard_check(
     issues: List[ValidationIssue],
     *,
     strict: bool,
+    bt_defs: Mapping[str, ET.Element],
 ) -> Set[str]:
     current = set(available)
     xp = _xpath_of(sequence_node, parent_map)
     for child in list(sequence_node):
         if child.tag == "Sequence":
-            current |= _sequence_blackboard_check(child, parent_map, skill_specs, current, issues, strict=strict)
+            current |= _sequence_blackboard_check(
+                child, parent_map, skill_specs, current, issues, strict=strict, bt_defs=bt_defs
+            )
             continue
         if child.tag in {"Fallback", "ReactiveFallback", "Repeat", "SubTreePlus"}:
-            current |= _collect_produced_vars(child, skill_specs)
+            current |= _collect_produced_vars(child, skill_specs, bt_defs)
             continue
         if not _is_skill_node(child):
             continue
@@ -263,7 +312,19 @@ def _sequence_blackboard_check(
             continue
         spec = skill_specs[skill_id]
         missing_inputs = []
-        input_attr_names = [attr_name for attr_name, attr_type in spec.attributes.items() if attr_type == "blackboard_port_input"]
+        bb_like = {
+            "blackboard_port_input",
+            "integer_or_blackboard",
+            "unsigned_int_or_blackboard",
+            "float_or_blackboard",
+            "double_or_blackboard",
+        }
+        outs = set(spec.blackboard_outputs or [])
+        input_attr_names = [
+            attr_name
+            for attr_name, attr_type in spec.attributes.items()
+            if attr_type in bb_like and attr_name not in outs
+        ]
         for attr_name in input_attr_names:
             attr_value = child.attrib.get(attr_name)
             if not attr_value:
@@ -307,8 +368,17 @@ def _sequence_blackboard_check(
     return current
 
 
-def _collect_produced_vars(node: ET.Element, skill_specs: Mapping[str, Any]) -> Set[str]:
+def _collect_produced_vars(
+    node: ET.Element,
+    skill_specs: Mapping[str, Any],
+    bt_defs: Optional[Mapping[str, ET.Element]] = None,
+) -> Set[str]:
     produced: Set[str] = set()
+    if node.tag == "SubTreePlus" and bt_defs is not None:
+        sid = node.attrib.get("ID")
+        if sid and sid in bt_defs:
+            produced |= _collect_behavior_tree_produced(bt_defs[sid], skill_specs, bt_defs)
+        return produced
     if _is_skill_node(node):
         skill_id = node.attrib.get("ID", "")
         spec = skill_specs.get(skill_id)
@@ -321,7 +391,7 @@ def _collect_produced_vars(node: ET.Element, skill_specs: Mapping[str, Any]) -> 
             for output_name in spec.blackboard_outputs:
                 produced.add(output_name)
     for child in list(node):
-        produced |= _collect_produced_vars(child, skill_specs)
+        produced |= _collect_produced_vars(child, skill_specs, bt_defs)
     return produced
 
 
@@ -503,7 +573,9 @@ def validate(
     for bt in bt_defs.values():
         body = _behavior_tree_body(bt)
         if body is not None and body.tag == "Sequence":
-            _sequence_blackboard_check(body, parent_map, skill_specs, set(external), issues, strict=strict)
+            _sequence_blackboard_check(
+                body, parent_map, skill_specs, set(external), issues, strict=strict, bt_defs=bt_defs
+            )
 
     _validate_nav4rail_semantics(root, bt_defs, parent_map, issues, skill_specs, strict=strict, constraints_dir=constraints_dir)
 

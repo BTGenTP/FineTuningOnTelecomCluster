@@ -2,8 +2,8 @@
 #SBATCH --job-name=nav4rail_sft_lora
 #SBATCH --output=runs/slurm/%x_%j.out
 #SBATCH --error=runs/slurm/%x_%j.err
-# Default GPU partition (Telecom Paris: 3090, P100; override: sbatch --partition=H100 ...)
-#SBATCH --partition=3090
+# Default GPU partition (override: sbatch --partition=3090 ...; verify name with sinfo -s)
+#SBATCH --partition=P100
 #SBATCH --gres=gpu:1
 #SBATCH --time=08:00:00
 #SBATCH --cpus-per-task=8
@@ -29,7 +29,7 @@ fi
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/_telecom_env.sh"
 
-CONFIG="${CONFIG:-configs/sft_lora.yaml}"
+CONFIG="${CONFIG:-configs/sft_lora_p100.yaml}"
 OUTROOT="${OUTROOT:-runs/slurm/${SLURM_JOB_NAME}_${SLURM_JOB_ID}}"
 DATASET="${DATASET:-}"
 N_TRAIN="${N_TRAIN:-500}"

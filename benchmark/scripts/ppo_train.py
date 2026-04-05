@@ -15,6 +15,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--epochs", type=int, default=1)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--output-root", type=str, default=None, help="Override config.output_root.")
+    p.add_argument(
+        "--adapter",
+        type=str,
+        default=None,
+        help="Optional PEFT adapter path (e.g. SFT LoRA) to initialize policy and frozen ref.",
+    )
     return p.parse_args()
 
 
@@ -40,16 +46,26 @@ def main() -> int:
     from src.config_loader import load_experiment_config
     from src.data.catalog import default_catalog_path, load_catalog
     from src.data.formatting import render_system_prompt
+    from src.evaluation.run_manifest import write_manifest_for_run
     from src.evaluation.runner import create_run_paths
+    from src.models.factory import apply_peft, load_base_model, load_tokenizer
     from src.rewards.reward_fn import reward_from_xml
     from src.xml_utils import extract_root_xml
 
     cfg = load_experiment_config(Path(args.config))
     if args.output_root:
         cfg.output_root = str(Path(args.output_root))
+    if args.adapter:
+        cfg.peft.adapter_path = args.adapter
 
     paths = create_run_paths(cfg.output_root)
     paths.experiment_json.write_text(Path(args.config).read_text(encoding="utf-8"), encoding="utf-8")
+    write_manifest_for_run(
+        paths,
+        config_path=Path(args.config).resolve(),
+        cfg=cfg,
+        extra={"adapter_cli": args.adapter, "prompts_file": args.prompts, "script": "ppo_train.py"},
+    )
 
     catalog = load_catalog(cfg.catalog_path or default_catalog_path())
     system_prompt = render_system_prompt(catalog, include_schema=cfg.prompt.include_schema)
@@ -62,15 +78,24 @@ def main() -> int:
     except Exception as exc:
         raise SystemExit(f"TRL PPO components not available: {exc}")
 
-    from transformers import AutoTokenizer
+    if not cfg.peft.method and not cfg.peft.adapter_path:
+        raise SystemExit("PPO LoRA: set peft.method (e.g. lora) and/or peft.adapter_path / --adapter for SFT init.")
 
-    tokenizer = AutoTokenizer.from_pretrained(cfg.model.tokenizer_name_or_path or cfg.model.model_name_or_path, use_fast=True)
+    tokenizer = load_tokenizer(cfg.model)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = AutoModelForCausalLMWithValueHead.from_pretrained(cfg.model.model_name_or_path).to(device)
-    ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(cfg.model.model_name_or_path).to(device)
+
+    policy_inner = apply_peft(load_base_model(cfg.model), cfg.peft)
+    model = AutoModelForCausalLMWithValueHead(policy_inner).to(device)
+
+    ref_inner = apply_peft(load_base_model(cfg.model), cfg.peft)
+    ref_inner.load_state_dict(policy_inner.state_dict(), strict=True)
+    ref_model = AutoModelForCausalLMWithValueHead(ref_inner).to(device)
+    ref_model.eval()
+    for p in ref_model.parameters():
+        p.requires_grad_(False)
 
     ppo_cfg = PPOConfig(
         learning_rate=cfg.training.learning_rate,
@@ -90,14 +115,19 @@ def main() -> int:
         for mission in missions:
             query = build_prompt(mission)
             query_t = tokenizer(query, return_tensors="pt").input_ids[0].to(device)
+            gen_kw: dict = {
+                "max_new_tokens": cfg.generation.max_new_tokens,
+                "do_sample": cfg.generation.do_sample,
+                "temperature": cfg.generation.temperature,
+                "top_p": cfg.generation.top_p,
+                "pad_token_id": tokenizer.pad_token_id,
+                "eos_token_id": tokenizer.eos_token_id,
+            }
+            if int(getattr(cfg.generation, "top_k", -1)) > 0:
+                gen_kw["top_k"] = int(cfg.generation.top_k)
             response_t = trainer.generate(
                 query_t,
-                max_new_tokens=cfg.generation.max_new_tokens,
-                do_sample=cfg.generation.do_sample,
-                temperature=cfg.generation.temperature,
-                top_p=cfg.generation.top_p,
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
+                **gen_kw,
             )
             response_text = tokenizer.decode(response_t, skip_special_tokens=True)
             xml = extract_root_xml(response_text) or response_text.strip()
@@ -124,7 +154,11 @@ def main() -> int:
 
     out_dir = Path(cfg.training.output_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained(out_dir)
+    inner = getattr(model, "pretrained_model", None)
+    if inner is not None:
+        inner.save_pretrained(out_dir)
+    else:
+        model.save_pretrained(out_dir)
     tokenizer.save_pretrained(out_dir)
 
     from src.evaluation.metrics import render_markdown_table
@@ -139,4 +173,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

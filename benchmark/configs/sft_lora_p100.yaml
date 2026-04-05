@@ -1,13 +1,13 @@
-name: nav4rail_grpo
-task: grpo
-output_root: runs/grpo
-method: grpo
+name: nav4rail_sft_lora_p100
+task: sft
+output_root: runs
+method: sft
 catalog_path: data/nav4rail_catalog_merged.json
 xsd_path: null
 model:
   model_name_or_path: mistralai/Mistral-7B-Instruct-v0.3
-  dtype: bf16
-  quantization: 4bit
+  dtype: fp16
+  quantization: null
 peft:
   method: lora
   r: 16
@@ -19,18 +19,15 @@ peft:
     - v_proj
     - o_proj
 prompt:
-  mode: zero_shot
+  mode: few_shot
+  few_shot_k: 2
   include_schema: true
 training:
-  output_dir: artifacts/grpo
-  learning_rate: 0.00005
+  output_dir: artifacts/sft_lora
+  learning_rate: 0.0002
   batch_size: 1
   gradient_accumulation_steps: 4
   num_train_epochs: 1.0
-  max_seq_length: 2048
-generation:
-  max_new_tokens: 768
-  temperature: 0.8
-  top_p: 0.95
-  top_k: -1
-  do_sample: true
+  max_seq_length: 4096
+metadata:
+  hardware_profile: p100

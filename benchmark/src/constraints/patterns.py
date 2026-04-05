@@ -54,10 +54,12 @@ def check_preparation_pattern(root: ET.Element, patterns: Mapping[str, Any]) -> 
     required_seq = spec.get("required_sequence") or []
     if not required_seq:
         return PatternFinding("PreparationPattern", True, "preparation_pattern_skipped", "No required_sequence specified.")
-    # Scope: if a BehaviorTree named 'preparation' exists, check inside it; otherwise global.
+    # Scope: preparation-like BT IDs used in ground-truth missions; else global.
     scoped = root
+    prep_ids = {"preparation", "base_preparation", "real_preparation", "get_mission", "Get_mission"}
     for bt in root.findall("BehaviorTree"):
-        if bt.attrib.get("ID") == "preparation" and list(bt):
+        bid = bt.attrib.get("ID") or ""
+        if bid in prep_ids and list(bt):
             scoped = bt
             break
     skill_nodes = list(_iter_skill_nodes(scoped))
@@ -122,18 +124,20 @@ def check_inspection_pattern(root: ET.Element, patterns: Mapping[str, Any]) -> P
         return PatternFinding("InspectionPattern", False, "inspection_subsequence_missing", "Missing required inspection subsequence.")
 
     fb_spec = spec.get("required_fallback") or {}
-    if fb_spec.get("tag") == "Fallback":
-        fallbacks = [n for n in root.iter("Fallback")]
-        if not fallbacks:
-            return PatternFinding("InspectionPattern", False, "inspection_requires_fallback", "Missing Fallback for inspection recovery.")
-        must_contain_any = fb_spec.get("must_contain_any") or []
-        corrective_pair = set(n.get("id") for n in fb_spec.get("corrective_branch_must_contain") or [])
-        for fb in fallbacks:
-            ids = {n.attrib.get("ID") for n in fb.iter() if n.tag in {"Action", "Condition"}}
-            any_ok = any((spec_item.get("id") in ids) for spec_item in must_contain_any if isinstance(spec_item, Mapping))
-            pair_ok = corrective_pair.issubset(ids)
-            if any_ok and pair_ok:
-                return PatternFinding("InspectionPattern", True, "inspection_ok", "Inspection recovery fallback satisfied.")
+    if not fb_spec or fb_spec.get("tag") != "Fallback":
+        return PatternFinding("InspectionPattern", True, "inspection_ok", "Inspection subsequence satisfied (fallback check disabled).")
+
+    fallbacks = [n for n in root.iter("Fallback")]
+    if not fallbacks:
+        return PatternFinding("InspectionPattern", False, "inspection_requires_fallback", "Missing Fallback for inspection recovery.")
+    must_contain_any = fb_spec.get("must_contain_any") or []
+    corrective_pair = set(n.get("id") for n in fb_spec.get("corrective_branch_must_contain") or [])
+    for fb in fallbacks:
+        ids = {n.attrib.get("ID") for n in fb.iter() if n.tag in {"Action", "Condition"}}
+        any_ok = any((spec_item.get("id") in ids) for spec_item in must_contain_any if isinstance(spec_item, Mapping))
+        pair_ok = corrective_pair.issubset(ids)
+        if any_ok and pair_ok:
+            return PatternFinding("InspectionPattern", True, "inspection_ok", "Inspection recovery fallback satisfied.")
     return PatternFinding("InspectionPattern", False, "inspection_requires_fallback", "Inspection recovery fallback is incomplete.")
 
 

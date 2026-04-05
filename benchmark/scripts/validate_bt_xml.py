@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -24,7 +26,43 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--constraints", type=str, default="constraints", help="Constraints directory.")
     p.add_argument("--strict", action="store_true", default=True)
+    p.add_argument(
+        "--write-report",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Write validation JSON to this path (file or directory).",
+    )
+    p.add_argument(
+        "--report-date",
+        type=str,
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="ISO date embedded in report metadata and optionally in the output filename.",
+    )
     return p.parse_args()
+
+
+def _resolve_report_path(write_report: str, report_date: str | None, root: Path) -> Path:
+    p = Path(write_report).expanduser()
+    if not p.is_absolute():
+        p = (root / p).resolve()
+    if report_date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", report_date):
+        raise SystemExit(f"--report-date must be YYYY-MM-DD, got {report_date!r}")
+    if p.is_dir() or str(write_report).endswith(("/", "\\")):
+        p.mkdir(parents=True, exist_ok=True)
+        stem = f"validation_report_{report_date}.json" if report_date else f"validation_report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.json"
+        return p / stem
+    if report_date:
+        parent = p.parent
+        stem = p.stem
+        suffix = p.suffix or ".json"
+        if stem.endswith(report_date):
+            out = p
+        else:
+            out = parent / f"{stem}_{report_date}{suffix}"
+        return out
+    return p
 
 
 def main() -> int:
@@ -65,7 +103,21 @@ def main() -> int:
         constraints_dir=str(constraints_dir),
         strict=args.strict,
     )
-    print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+    payload = report.to_dict()
+    if args.report_date:
+        payload.setdefault("metadata", {})
+        if isinstance(payload["metadata"], dict):
+            payload["metadata"]["report_date"] = args.report_date
+
+    text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    print(text.rstrip("\n"))
+
+    if args.write_report:
+        out_path = _resolve_report_path(args.write_report, args.report_date, root)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(text, encoding="utf-8")
+        print(f"Wrote report: {out_path}", file=sys.stderr)
+
     return 0 if report.ok else 1
 
 

@@ -1,4 +1,4 @@
-name: nav4rail_grpo
+name: nav4rail_grpo_p100
 task: grpo
 output_root: runs/grpo
 method: grpo
@@ -6,8 +6,8 @@ catalog_path: data/nav4rail_catalog_merged.json
 xsd_path: null
 model:
   model_name_or_path: mistralai/Mistral-7B-Instruct-v0.3
-  dtype: bf16
-  quantization: 4bit
+  dtype: fp16
+  quantization: null
 peft:
   method: lora
   r: 16
@@ -18,6 +18,7 @@ peft:
     - k_proj
     - v_proj
     - o_proj
+  adapter_path: null
 prompt:
   mode: zero_shot
   include_schema: true
@@ -34,3 +35,6 @@ generation:
   top_p: 0.95
   top_k: -1
   do_sample: true
+metadata:
+  hardware_profile: p100
+  phase: 1
