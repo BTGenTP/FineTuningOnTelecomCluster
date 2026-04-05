@@ -1,0 +1,18 @@
+# Slurm / P100: avoid PyPI `torch` (often pulls CUDA 13 + multi-GB nvidia-* wheels and fills $HOME quota).
+# Used automatically when BENCHMARK_GPU_PROFILE=p100 (see slurm/_telecom_env.sh).
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1+cu121
+accelerate
+bitsandbytes
+datasets
+lxml
+matplotlib
+numpy
+omegaconf
+pandas
+peft
+pyyaml
+pytest
+seaborn
+transformers
+trl

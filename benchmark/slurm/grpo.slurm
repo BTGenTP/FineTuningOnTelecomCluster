@@ -45,4 +45,4 @@ if [[ -n "${SFT_ADAPTER}" ]]; then
   ARGS+=(--adapter "$SFT_ADAPTER")
 fi
 
-python3 scripts/grpo_train.py "${ARGS[@]}"
+"${BENCHMARK_PYTHON}" scripts/grpo_train.py "${ARGS[@]}"

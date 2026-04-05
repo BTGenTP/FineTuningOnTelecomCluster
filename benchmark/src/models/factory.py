@@ -100,6 +100,12 @@ def apply_peft(model: Any, peft_config: PeftConfig) -> Any:
 def load_model_bundle(config: ModelConfig, peft_config: Optional[PeftConfig] = None) -> Tuple[Any, Any]:
     tokenizer = load_tokenizer(config)
     model = load_base_model(config)
+    if config.quantization and peft_config is not None:
+        q = str(config.quantization).lower()
+        if q in {"4bit", "nf4", "8bit"}:
+            from peft import prepare_model_for_kbit_training
+
+            model = prepare_model_for_kbit_training(model)
     if peft_config is not None:
         model = apply_peft(model, peft_config)
     return model, tokenizer

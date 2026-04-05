@@ -42,4 +42,4 @@ if [[ -n "${FEWSHOT_POOL}" ]]; then
   ARGS+=(--fewshot-pool "$FEWSHOT_POOL")
 fi
 
-python3 scripts/prompt_eval.py "${ARGS[@]}"
+"${BENCHMARK_PYTHON}" scripts/prompt_eval.py "${ARGS[@]}"

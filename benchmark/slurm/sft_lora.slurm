@@ -42,4 +42,6 @@ else
   ARGS+=(--generate-synthetic "$N_TRAIN" --write-dataset "$WRITE_DATASET")
 fi
 
-python3 scripts/sft_train.py "${ARGS[@]}"
+# Use BENCHMARK_PYTHON from _telecom_env.sh (venv); plain `python3` can resolve to the system
+# interpreter due to bash command hashing after `python3 -m venv`.
+"${BENCHMARK_PYTHON}" scripts/sft_train.py "${ARGS[@]}"

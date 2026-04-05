@@ -1,5 +1,7 @@
-# Optional PyTorch alignment for Pascal (P100, sm_60): install base deps first:
+# Pascal (P100, sm_60) — local pip (optional CUDA wheel reinstall after base deps):
 #   pip install -r requirements.txt
-# Then, if needed, reinstall torch to match cluster CUDA (example CUDA 11.8 wheels):
 #   pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 # Verify: python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+#
+# Telecom Slurm: when partition/profile is P100, `slurm/_telecom_env.sh` installs from
+# `requirements-p100-cluster.txt` (cu121 torch, smaller than default PyPI CUDA 13 stack).

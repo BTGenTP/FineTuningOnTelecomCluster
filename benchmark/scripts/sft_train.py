@@ -42,8 +42,8 @@ def main() -> int:
             write_jsonl(args.write_dataset, rows)
 
     result = runner.run_sft_experiment(train_rows=rows, config_path=Path(args.config).resolve())
-    print("run_dir:", result["run_dir"])
-    print("training:", result["training"])
+    print("run_dir:", result["run_dir"], flush=True)
+    print("training:", result["training"], flush=True)
     return 0
 
 

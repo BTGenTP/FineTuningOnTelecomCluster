@@ -160,6 +160,18 @@ Variables utiles :
 | `BENCHMARK_VENV` | Chemin du venv (défaut : `$BENCHMARK_ROOT/.venv`) |
 | `BENCHMARK_GPU_PROFILE` | `auto` (défaut), `p100`, ou `generic` — forcé par `_telecom_env.sh` si partition Slurm / `nvidia-smi` indique un P100 |
 | `GPU_PARTITION_ORDER` | Pour `submit_with_gpu_partition.sh` : ordre des partitions essayées (défaut : `P100 3090 H100`) |
+| `BENCHMARK_SYNC_BACK_DEST` | (Optionnel) Destination `rsync` pour recopier `runs/` à la fin du job Slurm (chemin NFS ou `user@hôte:chemin/benchmark/` si SSH depuis le nœud de calcul est possible) |
+
+**Sync hôte → cluster** (depuis ta machine, à la racine `benchmark/`) : `scripts/cluster_sync_push.sh` fait un `rsync` en excluant `.venv`, caches, `runs/` (sauf si `--with-runs`), `.git` (sauf `--with-git`). Exemple :
+
+```bash
+export BENCHMARK_CLUSTER_SSH='latoundji-25@gpu-gw'
+export BENCHMARK_CLUSTER_PATH='~/benchmark'
+./scripts/cluster_sync_push.sh --dry-run
+./scripts/cluster_sync_push.sh
+```
+
+**Rapatrier `runs/`** : `./scripts/cluster_sync_pull_runs.sh` (mêmes variables d’environnement). En alternative, avant `sbatch`, exporter `BENCHMARK_SYNC_BACK_DEST` pour que `_telecom_env.sh` déclenche un `rsync` en sortie de job (souvent plus simple : tirer depuis la passerelle avec `cluster_sync_pull_runs.sh`).
 
 Soumission directe :
 
@@ -237,3 +249,4 @@ Utiliser le **même fichier de missions** et la **même section `generation`** p
 - **UML catalog is empty** — wrong `--nav4rails-repo`. From `benchmark/`, use typically `--nav4rails-repo ../../../nav4rails_repo`.
 - **PPO / TRL** — TRL PPO APIs vary by version; prefer GRPO (`scripts/grpo_train.py`) or pin TRL.
 - **Schema-guided XSD** — set `xsd_path:` in the config and `prompt.include_xsd: true`; truncation via `prompt.xsd_max_chars`.
+- **Quota disque (`~/.cache` énorme)** — tu peux supprimer tout ou partie de `~/.cache` (pip : `pip cache purge` ; Hugging Face : sous-dossiers dans `$HF_HOME`). Garde ce que tu reconnais ; régénère le reste au prochain run. `.local/lib` contient souvent des paquets Python user ; ne le supprime que si tu acceptes de réinstaller.

@@ -6,8 +6,9 @@ catalog_path: data/nav4rail_catalog_merged.json
 xsd_path: null
 model:
   model_name_or_path: mistralai/Mistral-7B-Instruct-v0.3
+  # P100 16GB: full fp16 7B + long context OOMs — use 4-bit + shorter seq (raise if VRAM allows).
   dtype: fp16
-  quantization: null
+  quantization: nf4
 peft:
   method: lora
   r: 16
@@ -28,6 +29,6 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 4
   num_train_epochs: 1.0
-  max_seq_length: 4096
+  max_seq_length: 2048
 metadata:
   hardware_profile: p100

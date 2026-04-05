@@ -72,12 +72,40 @@ if [[ ! -f "$REQ" ]]; then
 fi
 
 VENV_DIR="${BENCHMARK_VENV:-$BENCHMARK_ROOT/.venv}"
-if [[ ! -d "$VENV_DIR" ]]; then
+_venv_py=""
+if [[ -x "$VENV_DIR/bin/python3" ]]; then
+  _venv_py="$VENV_DIR/bin/python3"
+elif [[ -x "$VENV_DIR/bin/python" ]]; then
+  _venv_py="$VENV_DIR/bin/python"
+fi
+# Quota / failed pip rollbacks can leave a `.venv` directory without bin/python3 — do not skip creation.
+if [[ -z "$_venv_py" ]]; then
+  if [[ -d "$VENV_DIR" ]]; then
+    echo "[job] WARN: venv at $VENV_DIR has no usable python; removing and recreating"
+    rm -rf "$VENV_DIR"
+  fi
   echo "[job] creating venv: $VENV_DIR"
   python3 -m venv "$VENV_DIR"
+  if [[ -x "$VENV_DIR/bin/python3" ]]; then
+    _venv_py="$VENV_DIR/bin/python3"
+  elif [[ -x "$VENV_DIR/bin/python" ]]; then
+    _venv_py="$VENV_DIR/bin/python"
+  else
+    echo "[job] ERROR: venv creation failed (no python in $VENV_DIR/bin)"
+    exit 1
+  fi
 fi
 # shellcheck source=/dev/null
 source "$VENV_DIR/bin/activate"
+# Bash caches the pre-venv `python3` path; without this, `python3`/`pip` can still hit the
+# system interpreter → "Defaulting to user installation" and a venv that never gets packages.
+hash -r 2>/dev/null || true
+
+# Unbuffered Python so Slurm .out/.err show logs promptly (training can be long).
+export PYTHONUNBUFFERED=1
+
+# Always use the venv interpreter for installs and import checks (do not rely on PATH alone).
+export BENCHMARK_PYTHON="$_venv_py"
 
 export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
@@ -86,27 +114,34 @@ export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$HOME/.cache/pip}"
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 mkdir -p "$HF_HUB_CACHE" "$HF_DATASETS_CACHE" "$PIP_CACHE_DIR" "$BENCHMARK_ROOT/runs/slurm"
 
-echo "[job] python: $(command -v python3) $(python3 --version 2>&1)"
+echo "[job] python: $BENCHMARK_PYTHON $($BENCHMARK_PYTHON --version 2>&1)"
 
-python3 -m pip install --upgrade pip wheel setuptools
-python3 -m pip install -r "$REQ"
+# On P100 clusters, unpinned `torch` on PyPI often resolves to a huge CUDA 13 stack; prefer cu121 wheels.
+REQ_INSTALL="$REQ"
+if [[ "$BENCHMARK_GPU_PROFILE" == "p100" && -f "$BENCHMARK_ROOT/requirements-p100-cluster.txt" ]]; then
+  REQ_INSTALL="$BENCHMARK_ROOT/requirements-p100-cluster.txt"
+  echo "[job] using P100 requirements: $REQ_INSTALL"
+fi
+
+"$BENCHMARK_PYTHON" -m pip install --upgrade pip wheel setuptools
+"$BENCHMARK_PYTHON" -m pip install -r "$REQ_INSTALL"
 
 # PyYAML: `import yaml` — package name on pip is `pyyaml` (not `yaml`)
-if ! python3 -c "import yaml" 2>/dev/null; then
+if ! "$BENCHMARK_PYTHON" -c "import yaml" 2>/dev/null; then
   echo "[job] installing PyYAML (import yaml)"
-  python3 -m pip install "pyyaml>=6"
+  "$BENCHMARK_PYTHON" -m pip install "pyyaml>=6"
 fi
 
 export PYTHONPATH="$BENCHMARK_ROOT"
 
 # Minimal import checks before training / eval
-if ! python3 -c "import yaml, torch, transformers, trl; import src.config_loader" 2>/dev/null; then
+if ! "$BENCHMARK_PYTHON" -c "import yaml, torch, transformers, trl; import src.config_loader" 2>/dev/null; then
   echo "[job] ERROR: core imports failed after pip install. Retry: pip install -r requirements.txt"
-  python3 -c "import yaml, torch, transformers, trl; import src.config_loader" || true
+  "$BENCHMARK_PYTHON" -c "import yaml, torch, transformers, trl; import src.config_loader" || true
   exit 1
 fi
 
-python3 << 'PY'
+"$BENCHMARK_PYTHON" << 'PY'
 import os
 import torch
 print("[job] manifest_kv torch_version=" + torch.__version__)
@@ -118,3 +153,9 @@ else:
 PY
 
 echo "[job] prerequisites OK"
+
+# Optional rsync of runs/ at job end (only under Slurm; set BENCHMARK_SYNC_BACK_DEST to enable).
+if [[ -n "${SLURM_JOB_ID:-}" && -f "$_SLURM_DIR/_telecom_sync_back.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$_SLURM_DIR/_telecom_sync_back.sh"
+fi

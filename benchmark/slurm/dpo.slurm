@@ -46,4 +46,4 @@ if [[ -n "${REJECTED_ADAPTER}" ]]; then
   ARGS+=(--rejected-adapter "$REJECTED_ADAPTER")
 fi
 
-python3 scripts/dpo_train.py "${ARGS[@]}"
+"${BENCHMARK_PYTHON}" scripts/dpo_train.py "${ARGS[@]}"

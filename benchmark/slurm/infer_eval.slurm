@@ -42,4 +42,4 @@ if [[ -n "${ADAPTER}" ]]; then
   ARGS+=(--adapter "$ADAPTER")
 fi
 
-python3 scripts/infer_eval.py "${ARGS[@]}"
+"${BENCHMARK_PYTHON}" scripts/infer_eval.py "${ARGS[@]}"
