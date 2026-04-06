@@ -187,8 +187,11 @@ def main() -> int:
                 seq = model.generate(input_ids=query_ids, **gen_kw)
             seq = seq.to(device)
             response_ids = seq[0]
-            response_text = tokenizer.decode(response_ids, skip_special_tokens=True)
-            xml = extract_root_xml(response_text) or response_text.strip()
+            # Decode only the generated completion (avoid XML-like strings in the prompt contaminating extraction).
+            context_len = int(query_ids.shape[1])
+            completion_ids = response_ids[context_len:]
+            completion_text = tokenizer.decode(completion_ids, skip_special_tokens=True)
+            xml = extract_root_xml(completion_text) or completion_text.strip()
 
             score, breakdown, _report = reward_from_xml(
                 xml_text=xml,
@@ -196,10 +199,19 @@ def main() -> int:
                 xsd_path=cfg.xsd_path,
                 strict=True,
                 constraints_dir=str(Path("constraints").resolve()),
+                # Shape reward for PPO exploration: getting the attribute present-but-wrong is "closer"
+                # than omitting it entirely, so penalize missing main_tree_to_execute a bit more.
+                per_code_penalty={"root_main_tree": 0.15, "main_tree_missing": 0.1},
+            )
+            l1_error_codes = sorted(
+                {
+                    str(it.get("code"))
+                    for it in (_report.get("issues") or [])
+                    if isinstance(it, dict) and it.get("layer") == "L1" and it.get("severity") == "error"
+                }
             )
 
             # --- PPO update (single-sample, on-policy) ---
-            context_len = int(query_ids.shape[1])
             if int(response_ids.shape[0]) <= context_len:
                 continue
             # `generate()` doesn't pad; attention mask is all ones.
@@ -265,6 +277,12 @@ def main() -> int:
                     "pass_l1": breakdown.pass_l1,
                     "pass_l2": breakdown.pass_l2,
                     "pass_l3": breakdown.pass_l3,
+                    "errors_l1": breakdown.errors_l1,
+                    "errors_l2": breakdown.errors_l2,
+                    "errors_l3": breakdown.errors_l3,
+                    "base_score": breakdown.base_score,
+                    "penalty_applied": breakdown.penalty_applied,
+                    "l1_error_codes": l1_error_codes,
                     "ppo_stats": stats,
                 }
             )

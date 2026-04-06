@@ -250,12 +250,3 @@ Utiliser le **même fichier de missions** et la **même section `generation`** p
 ### 6) Export reports
 
 `src/evaluation/metrics.py` provides CSV/Markdown and an optional plot export via `ExperimentRunner.write_publication_reports`.
-
-## Troubleshooting
-
-- **`ModuleNotFoundError: No module named 'yaml'`** — install dependencies from this repo: `pip install -r requirements.txt`. The package name on PyPI is **`pyyaml`** (`import yaml`). Do **not** run `pip install yaml`.
-- **`nav4rail_catalog_merged.json` missing** — run step **1b** (`merge_catalogs.py`) or point `catalog_path` to `data/nav4rail_catalog.json` in your YAML.
-- **UML catalog is empty** — wrong `--nav4rails-repo`. From `benchmark/`, use typically `--nav4rails-repo ../../../nav4rails_repo`.
-- **PPO / TRL** — TRL PPO APIs vary by version; prefer GRPO (`scripts/grpo_train.py`) or pin TRL.
-- **Schema-guided XSD** — set `xsd_path:` in the config and `prompt.include_xsd: true`; truncation via `prompt.xsd_max_chars`.
-- **Quota disque (`~/.cache` énorme)** — tu peux supprimer tout ou partie de `~/.cache` (pip : `pip cache purge` ; Hugging Face : sous-dossiers dans `$HF_HOME`). Garde ce que tu reconnais ; régénère le reste au prochain run. `.local/lib` contient souvent des paquets Python user ; ne le supprime que si tu acceptes de réinstaller.

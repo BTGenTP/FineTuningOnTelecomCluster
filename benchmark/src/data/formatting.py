@@ -26,7 +26,9 @@ def render_catalog_compact(catalog: Mapping[str, Any]) -> str:
 def render_system_prompt(catalog: Mapping[str, Any], *, include_schema: bool) -> str:
     lines = [
         "You generate only BehaviorTree.CPP v4 XML.",
-        "Output must start with <root> and contain complete BehaviorTree definitions.",
+        "Output must be a complete XML document with a single root element named 'root'.",
+        "The root element MUST include the attribute main_tree_to_execute=\"<MAIN_TREE_ID>\".",
+        "You MUST define a BehaviorTree whose ID equals <MAIN_TREE_ID>.",
         "Use only NAV4RAIL skills from the catalog.",
         "Never invent IDs, tags, or blackboard ports.",
     ]

@@ -7,13 +7,14 @@ from xml.etree import ElementTree as ET
 
 def extract_root_xml(text: str) -> Optional[str]:
     s = text or ""
-    start = s.find("<root")
-    if start < 0:
-        return None
-    end = s.find("</root>", start)
+    # Prefer the last complete <root ...> ... </root> block in case other text precedes it.
+    end = s.rfind("</root>")
     if end < 0:
         return None
     end += len("</root>")
+    start = s.rfind("<root", 0, end)
+    if start < 0:
+        return None
     return s[start:end].strip()
 
 

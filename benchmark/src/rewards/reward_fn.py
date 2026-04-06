@@ -55,16 +55,6 @@ def _layer_error_counts(issues: Iterable[ValidationIssue]) -> dict[str, int]:
     return counts
 
 
-def _weighted_error_penalty(
-    counts: Mapping[str, int],
-    *,
-    per_error: float,
-    weight_by_layer: Optional[Mapping[str, float]],
-) -> float:
-    w = {layer: float((weight_by_layer or {}).get(layer, 1.0)) for layer in ("L1", "L2", "L3")}
-    return per_error * sum(w[layer] * counts[layer] for layer in ("L1", "L2", "L3"))
-
-
 def _penalty_counts_hierarchical(raw: Mapping[str, int]) -> dict[str, int]:
     """Ne pénalise que la première couche en échec (L1 puis L2 puis L3)."""
     if raw["L1"] > 0:
@@ -78,6 +68,7 @@ def reward_from_report(
     report: ValidationReport,
     *,
     per_error_penalty: float = 0.1,
+    per_code_penalty: Optional[Mapping[str, float]] = None,
     error_weight_by_layer: Optional[Mapping[str, float]] = None,
     penalty_cap: Optional[float] = 2.0,
     score_floor: Optional[float] = -1.0,
@@ -103,20 +94,27 @@ def reward_from_report(
         base_score += 0.2 if pass_l1 else 0.0
         base_score += 0.3 if pass_l1 and pass_l2 else 0.0
         base_score += 0.5 if pass_l1 and pass_l2 and pass_l3 else 0.0
-        penalty_src = _penalty_counts_hierarchical(counts)
+        first_layer = "L1" if counts["L1"] > 0 else ("L2" if counts["L2"] > 0 else "L3")
     else:
         base_score = 0.0
         base_score += 0.2 if pass_l1 else 0.0
         base_score += 0.3 if pass_l2 else 0.0
         base_score += 0.5 if pass_l3 else 0.0
-        penalty_src = dict(counts)
+        first_layer = None
 
     total_errors = counts["L1"] + counts["L2"] + counts["L3"]
-    penalty_raw = _weighted_error_penalty(
-        penalty_src,
-        per_error=per_error_penalty,
-        weight_by_layer=error_weight_by_layer,
-    )
+    layer_w = {layer: float((error_weight_by_layer or {}).get(layer, 1.0)) for layer in ("L1", "L2", "L3")}
+    error_issues = [it for it in report.issues if it.severity == "error" and it.layer in {"L1", "L2", "L3"}]
+    if hierarchical_layers and first_layer is not None:
+        selected = [it for it in error_issues if it.layer == first_layer]
+    else:
+        selected = error_issues
+    penalty_src = {"L1": 0, "L2": 0, "L3": 0}
+    penalty_raw = 0.0
+    for it in selected:
+        penalty_src[it.layer] += 1
+        per = float((per_code_penalty or {}).get(it.code, per_error_penalty))
+        penalty_raw += layer_w[it.layer] * per
     if penalty_cap is not None:
         penalty_applied = min(penalty_raw, float(penalty_cap))
     else:
@@ -153,6 +151,7 @@ def reward_from_xml(
     constraints_dir: Optional[str] = None,
     external_blackboard: Optional[Iterable[str]] = None,
     per_error_penalty: float = 0.1,
+    per_code_penalty: Optional[Mapping[str, float]] = None,
     error_weight_by_layer: Optional[Mapping[str, float]] = None,
     penalty_cap: Optional[float] = 2.0,
     score_floor: Optional[float] = -1.0,
@@ -169,6 +168,7 @@ def reward_from_xml(
     breakdown = reward_from_report(
         report,
         per_error_penalty=per_error_penalty,
+        per_code_penalty=per_code_penalty,
         error_weight_by_layer=error_weight_by_layer,
         penalty_cap=penalty_cap,
         score_floor=score_floor,
