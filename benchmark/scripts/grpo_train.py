@@ -83,18 +83,25 @@ def main() -> int:
     model, tokenizer = load_model_bundle(cfg.model, cfg.peft)
     model.train()
 
-    # Frozen reference for KL: clone the policy once. A second `load_model_bundle` + `PeftModel.from_pretrained`
-    # can crash in accelerate's get_balanced_memory (TypeError: unhashable type: 'set') with Mistral + device_map.
-    ref_model = copy.deepcopy(model)
+    train_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Clone on CPU (frees GPU) so deepcopy does not OOM; keep ref on CPU so two 7B fp16 weights are not both on a 16 GiB GPU.
+    if train_device.type == "cuda":
+        model_cpu = model.cpu()
+        torch.cuda.empty_cache()
+        ref_model = copy.deepcopy(model_cpu)
+        model = model_cpu.to(train_device)
+        del model_cpu
+        torch.cuda.empty_cache()
+    else:
+        ref_model = copy.deepcopy(model)
     ref_model.eval()
     for p in ref_model.parameters():
         p.requires_grad_(False)
 
-    device = getattr(model, "device", None)
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model.to(device)
-        ref_model.to(device)
+    device = train_device
+    ref_on_cpu = train_device.type == "cuda"
+    if not ref_on_cpu:
+        ref_model = ref_model.to(device)
 
     optim = torch.optim.AdamW(model.parameters(), lr=cfg.training.learning_rate)
 
@@ -155,9 +162,14 @@ def main() -> int:
                 full_ids = torch.cat([prompt_ids[0], gen_ids], dim=0).unsqueeze(0)
                 with torch.set_grad_enabled(True):
                     out = model(full_ids)
-                    ref_out = ref_model(full_ids)
+                    if ref_on_cpu:
+                        with torch.no_grad():
+                            ref_out = ref_model(full_ids.cpu())
+                        ref_logits = ref_out.logits[:, :-1, :].to(device)
+                    else:
+                        ref_out = ref_model(full_ids)
+                        ref_logits = ref_out.logits[:, :-1, :]
                     logits = out.logits[:, :-1, :]
-                    ref_logits = ref_out.logits[:, :-1, :]
                     target = full_ids[:, 1:]
 
                     # Mask prompt tokens.

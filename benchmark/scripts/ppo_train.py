@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import random
 from pathlib import Path
 
@@ -74,14 +75,24 @@ def main() -> int:
         return f"{system_prompt}\n\nMission:\n{mission.strip()}\n\nXML:\n"
 
     try:
-        from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
+        from trl.experimental.ppo import AutoModelForCausalLMWithValueHead
+    except Exception:
+        try:
+            from trl import AutoModelForCausalLMWithValueHead
+        except Exception as exc:
+            raise SystemExit(
+                "TRL PPO ValueHead not available: "
+                f"{exc}\n"
+                "Try `from trl.experimental.ppo import AutoModelForCausalLMWithValueHead` "
+                "or `pip install 'trl>=0.26.0,<0.29.0'`."
+            )
+    try:
+        from trl import PPOConfig, PPOTrainer
     except Exception as exc:
         raise SystemExit(
-            "TRL PPO components not available: "
+            "TRL PPO trainer not available: "
             f"{exc}\n"
-            "Install a TRL release that still exports the classic PPO API, e.g. "
-            "`pip install 'trl>=0.26.0,<0.29.0'` (0.29+ removed PPO from `trl` root; "
-            "this script is not ported to `trl.experimental.ppo` yet)."
+            "Install e.g. `pip install 'trl>=0.26.0,<0.29.0'` (classic PPO API)."
         )
 
     if not cfg.peft.method and not cfg.peft.adapter_path:
@@ -94,10 +105,18 @@ def main() -> int:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     policy_inner = apply_peft(load_base_model(cfg.model), cfg.peft)
+    # Clone on CPU so we never call PeftModel.from_pretrained twice (accelerate bug with Mistral/device_map)
+    # and so deepcopy does not allocate duplicate CUDA tensors while VRAM is full.
+    if device.type == "cuda":
+        pin_cpu = policy_inner.cpu()
+        torch.cuda.empty_cache()
+        ref_inner = copy.deepcopy(pin_cpu)
+        policy_inner = pin_cpu.to(device)
+        del pin_cpu
+        ref_inner = ref_inner.to(device)
+    else:
+        ref_inner = copy.deepcopy(policy_inner)
     model = AutoModelForCausalLMWithValueHead(policy_inner).to(device)
-
-    ref_inner = apply_peft(load_base_model(cfg.model), cfg.peft)
-    ref_inner.load_state_dict(policy_inner.state_dict(), strict=True)
     ref_model = AutoModelForCausalLMWithValueHead(ref_inner).to(device)
     ref_model.eval()
     for p in ref_model.parameters():
