@@ -16,3 +16,4 @@ pytest
 seaborn
 transformers
 trl>=0.26.0,<0.29.0
+weave

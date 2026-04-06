@@ -229,6 +229,7 @@ ou
 # Exemples (à lancer depuis ~/benchmark sur le cluster)
 SFT_ADAPTER=artifacts/sft_lora sbatch slurm/ppo.slurm
 SFT_ADAPTER=artifacts/sft_lora sbatch slurm/grpo.slurm
+CHOSEN_ADAPTER=artifacts/sft_lora sbatch slurm/dpo.slurm
 ```
 
 ### Phase 1 (protocole fixe) vs phase 2 (réglage d’hyperparamètres)

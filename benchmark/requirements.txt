@@ -14,3 +14,4 @@ torch
 transformers
 # PPO script uses the classic TRL PPO API; 0.29+ removed it from `trl` top-level exports.
 trl>=0.26.0,<0.29.0
+weave
