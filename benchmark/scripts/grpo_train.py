@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import random
 from pathlib import Path
 from typing import Any
@@ -82,8 +83,9 @@ def main() -> int:
     model, tokenizer = load_model_bundle(cfg.model, cfg.peft)
     model.train()
 
-    # Frozen reference model for KL penalty.
-    ref_model, _ref_tok = load_model_bundle(cfg.model, cfg.peft)
+    # Frozen reference for KL: clone the policy once. A second `load_model_bundle` + `PeftModel.from_pretrained`
+    # can crash in accelerate's get_balanced_memory (TypeError: unhashable type: 'set') with Mistral + device_map.
+    ref_model = copy.deepcopy(model)
     ref_model.eval()
     for p in ref_model.parameters():
         p.requires_grad_(False)

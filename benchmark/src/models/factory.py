@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from dataclasses import asdict
 from typing import Any, Optional, Tuple
 
@@ -58,11 +59,18 @@ def load_base_model(config: ModelConfig) -> Any:
     from transformers import AutoModelForCausalLM
 
     torch_dtype = _torch_dtype(config.dtype)
-    kwargs = {
-        "device_map": config.device_map,
-        "torch_dtype": torch_dtype,
+    kwargs: dict[str, Any] = {
         "trust_remote_code": config.trust_remote_code,
     }
+    _dm = config.device_map
+    if _dm is not None and str(_dm).strip().lower() not in {"", "none"}:
+        kwargs["device_map"] = _dm
+    # Prefer `dtype` (Transformers >= ~4.46); `torch_dtype` triggers a deprecation warning.
+    _from_pretrained = AutoModelForCausalLM.from_pretrained
+    if "dtype" in inspect.signature(_from_pretrained).parameters:
+        kwargs["dtype"] = torch_dtype
+    else:
+        kwargs["torch_dtype"] = torch_dtype
     quantization_config = build_quantization_config(config.quantization, compute_dtype=torch_dtype)
     if quantization_config is not None:
         kwargs["quantization_config"] = quantization_config

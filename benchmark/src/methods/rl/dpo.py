@@ -44,6 +44,67 @@ def build_preference_dataset(
     return pairs
 
 
+def build_preference_pairs_from_completions(
+    *,
+    prompts: Sequence[str],
+    chosen_texts: Sequence[str],
+    rejected_texts: Sequence[str],
+    reward_fn: Callable[[str, str], float],
+) -> list[PreferencePair]:
+    """Same pairing logic as ``build_preference_dataset`` but with precomputed generations.
+
+    Lets callers unload one LM from the GPU before loading the other (avoids two full models on one GPU).
+    """
+    if not (len(prompts) == len(chosen_texts) == len(rejected_texts)):
+        raise ValueError("prompts, chosen_texts, and rejected_texts must have the same length")
+    pairs: list[PreferencePair] = []
+    for prompt, chosen, rejected in zip(prompts, chosen_texts, rejected_texts):
+        chosen_score = reward_fn(prompt, chosen)
+        rejected_score = reward_fn(prompt, rejected)
+        if chosen_score < rejected_score:
+            chosen, rejected = rejected, chosen
+            chosen_score, rejected_score = rejected_score, chosen_score
+        pairs.append(
+            PreferencePair(
+                prompt=prompt,
+                chosen=chosen,
+                rejected=rejected,
+                chosen_score=chosen_score,
+                rejected_score=rejected_score,
+            )
+        )
+    return pairs
+
+
+def build_preference_pairs_from_completions(
+    *,
+    prompts: Sequence[str],
+    chosen_texts: Sequence[str],
+    rejected_texts: Sequence[str],
+    reward_fn: Callable[[str, str], float],
+) -> list[PreferencePair]:
+    """Same pairing logic as `build_preference_dataset`, but with precomputed generations (e.g. one GPU model at a time)."""
+    if not (len(prompts) == len(chosen_texts) == len(rejected_texts)):
+        raise ValueError("prompts, chosen_texts, and rejected_texts must have the same length")
+    pairs: list[PreferencePair] = []
+    for prompt, chosen, rejected in zip(prompts, chosen_texts, rejected_texts, strict=True):
+        chosen_score = reward_fn(prompt, chosen)
+        rejected_score = reward_fn(prompt, rejected)
+        if chosen_score < rejected_score:
+            chosen, rejected = rejected, chosen
+            chosen_score, rejected_score = rejected_score, chosen_score
+        pairs.append(
+            PreferencePair(
+                prompt=prompt,
+                chosen=chosen,
+                rejected=rejected,
+                chosen_score=chosen_score,
+                rejected_score=rejected_score,
+            )
+        )
+    return pairs
+
+
 def run_dpo(
     config: ExperimentConfig,
     preference_pairs: Sequence[PreferencePair],

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import random
 from pathlib import Path
 from typing import Any
@@ -68,15 +69,7 @@ def main() -> int:
     else:
         rejected_cfg.peft.adapter_path = None
 
-    chosen_model, chosen_tok = load_model_bundle(chosen_cfg.model, chosen_cfg.peft)
-    rejected_model, rejected_tok = load_model_bundle(rejected_cfg.model, rejected_cfg.peft)
-    chosen_device = str(getattr(chosen_model, "device", "")) or None
-    rejected_device = str(getattr(rejected_model, "device", "")) or None
-
     from _hf_generate import HFChatGenerator
-
-    chosen_gen = HFChatGenerator(model=chosen_model, tokenizer=chosen_tok, device=chosen_device)
-    rejected_gen = HFChatGenerator(model=rejected_model, tokenizer=rejected_tok, device=rejected_device)
 
     def _generate_xml(gen: HFChatGenerator, mission: str) -> str:
         bundle = render_prompt_bundle(mission=mission, catalog=catalog, prompt_config=cfg.prompt, xsd_path=cfg.xsd_path)
@@ -100,14 +93,40 @@ def main() -> int:
         )
         return score
 
-    from src.methods.rl.dpo import build_preference_dataset
+    from src.methods.rl.dpo import build_preference_pairs_from_completions
     from src.evaluation.runner import ExperimentRunner
 
+    def _release_cuda_memory() -> None:
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
+
     prompts = _load_prompts(args)
-    pairs = build_preference_dataset(
+
+    # One LM on GPU at a time: two full 7B (even 4-bit) models commonly OOM a 16 GiB card.
+    chosen_model, chosen_tok = load_model_bundle(chosen_cfg.model, chosen_cfg.peft)
+    chosen_device = str(getattr(chosen_model, "device", "")) or None
+    chosen_gen = HFChatGenerator(model=chosen_model, tokenizer=chosen_tok, device=chosen_device)
+    chosen_xmls = [_generate_xml(chosen_gen, p) for p in prompts]
+    del chosen_gen, chosen_model, chosen_tok
+    _release_cuda_memory()
+
+    rejected_model, rejected_tok = load_model_bundle(rejected_cfg.model, rejected_cfg.peft)
+    rejected_device = str(getattr(rejected_model, "device", "")) or None
+    rejected_gen = HFChatGenerator(model=rejected_model, tokenizer=rejected_tok, device=rejected_device)
+    rejected_xmls = [_generate_xml(rejected_gen, p) for p in prompts]
+    del rejected_gen, rejected_model, rejected_tok
+    _release_cuda_memory()
+
+    pairs = build_preference_pairs_from_completions(
         prompts=prompts,
-        chosen_fn=lambda p: _generate_xml(chosen_gen, p),
-        rejected_fn=lambda p: _generate_xml(rejected_gen, p),
+        chosen_texts=chosen_xmls,
+        rejected_texts=rejected_xmls,
         reward_fn=_reward,
     )
 

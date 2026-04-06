@@ -62,7 +62,7 @@ class ValidationReport:
 class ModelConfig:
     model_name_or_path: str
     tokenizer_name_or_path: Optional[str] = None
-    device_map: str = "auto"
+    device_map: Optional[str] = "auto"
     dtype: str = "bf16"
     quantization: Optional[str] = None
     use_flash_attention: bool = False

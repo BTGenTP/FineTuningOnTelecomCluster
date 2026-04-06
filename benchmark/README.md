@@ -223,6 +223,14 @@ python3 scripts/grpo_train.py --config configs/grpo.yaml --n 50 --group-size 4 -
 python3 scripts/ppo_train.py  --config configs/ppo.yaml  --n 20 --epochs 1 --output-root runs/ppo
 ```
 
+ou 
+
+```
+# Exemples (à lancer depuis ~/benchmark sur le cluster)
+SFT_ADAPTER=artifacts/sft_lora sbatch slurm/ppo.slurm
+SFT_ADAPTER=artifacts/sft_lora sbatch slurm/grpo.slurm
+```
+
 ### Phase 1 (protocole fixe) vs phase 2 (réglage d’hyperparamètres)
 
 - **Phase 1** : un même `model_name_or_path`, des configs `*_p100.yaml` (ou équivalent), un **JSONL de missions partagé** (`--prompts` / `--missions`), des **hyperparamètres de décodage identiques** dans `generation` (`temperature`, `top_p`, `top_k`, `max_new_tokens`, `do_sample`). La **récompense** est le **validateur XML déterministe** (`reward_from_xml`) — pas de « reward model » neuronal ; seule la **génération** est stochastique.

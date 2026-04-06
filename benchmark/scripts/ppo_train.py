@@ -74,9 +74,15 @@ def main() -> int:
         return f"{system_prompt}\n\nMission:\n{mission.strip()}\n\nXML:\n"
 
     try:
-        from trl import PPOConfig, PPOTrainer, AutoModelForCausalLMWithValueHead
+        from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
     except Exception as exc:
-        raise SystemExit(f"TRL PPO components not available: {exc}")
+        raise SystemExit(
+            "TRL PPO components not available: "
+            f"{exc}\n"
+            "Install a TRL release that still exports the classic PPO API, e.g. "
+            "`pip install 'trl>=0.26.0,<0.29.0'` (0.29+ removed PPO from `trl` root; "
+            "this script is not ported to `trl.experimental.ppo` yet)."
+        )
 
     if not cfg.peft.method and not cfg.peft.adapter_path:
         raise SystemExit("PPO LoRA: set peft.method (e.g. lora) and/or peft.adapter_path / --adapter for SFT init.")
