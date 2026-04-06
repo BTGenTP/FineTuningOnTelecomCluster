@@ -7,7 +7,8 @@ xsd_path: null
 model:
   model_name_or_path: mistralai/Mistral-7B-Instruct-v0.3
   dtype: fp16
-  quantization: null
+  # P100 16GB: GRPO policy-gradient steps are VRAM heavy; prefer QLoRA.
+  quantization: nf4
   device_map: cuda:0
 peft:
   method: lora
@@ -31,7 +32,8 @@ training:
   num_train_epochs: 1.0
   max_seq_length: 2048
 generation:
-  max_new_tokens: 768
+  # Keep headroom for policy-gradient forwards.
+  max_new_tokens: 512
   temperature: 0.8
   top_p: 0.95
   top_k: -1

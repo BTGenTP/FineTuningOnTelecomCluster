@@ -46,6 +46,7 @@ def main() -> int:
     args = parse_args()
 
     import torch
+    import torch.nn.functional as F
 
     from src.config_loader import load_experiment_config
     from src.data.catalog import default_catalog_path, load_catalog
@@ -82,6 +83,16 @@ def main() -> int:
 
     model, tokenizer = load_model_bundle(cfg.model, cfg.peft)
     model.train()
+    # Reduce activation memory for long-context policy gradients.
+    try:
+        model.config.use_cache = False
+    except Exception:
+        pass
+    if hasattr(model, "gradient_checkpointing_enable"):
+        try:
+            model.gradient_checkpointing_enable()
+        except Exception:
+            pass
 
     train_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Clone on CPU (frees GPU) so deepcopy does not OOM; keep ref on CPU so two 7B fp16 weights are not both on a 16 GiB GPU.
@@ -115,8 +126,15 @@ def main() -> int:
         random.shuffle(prompts)
         for mission in prompts:
             prompt_text = build_prompt(mission)
-            prompt_ids = tokenizer(prompt_text, return_tensors="pt").input_ids.to(device)
-            prompt_len = prompt_ids.shape[-1]
+            max_seq_length = int(getattr(cfg.training, "max_seq_length", 2048) or 2048)
+            desired_new = int(getattr(cfg.generation, "max_new_tokens", 256) or 256)
+            # Ensure prompt+completion fits in memory and respects config max_seq_length.
+            prompt_max_len = max(32, max_seq_length - max(1, desired_new) - 1)
+            prompt_enc = tokenizer(prompt_text, return_tensors="pt", truncation=True, max_length=prompt_max_len)
+            prompt_ids = prompt_enc.input_ids.to(device)
+            prompt_attn = getattr(prompt_enc, "attention_mask", None)
+            prompt_attn = prompt_attn.to(device) if prompt_attn is not None else torch.ones_like(prompt_ids)
+            prompt_len = int(prompt_ids.shape[-1])
 
             gen_token_ids: list[torch.Tensor] = []
             responses: list[str] = []
@@ -124,9 +142,11 @@ def main() -> int:
 
             for gi in range(args.group_size):
                 with torch.no_grad():
+                    eff_max_new = max(1, min(desired_new, max_seq_length - prompt_len - 1))
                     gen_kwargs: dict[str, Any] = {
                         "input_ids": prompt_ids,
-                        "max_new_tokens": cfg.generation.max_new_tokens,
+                        "attention_mask": prompt_attn,
+                        "max_new_tokens": eff_max_new,
                         "do_sample": cfg.generation.do_sample,
                         "temperature": cfg.generation.temperature,
                         "top_p": cfg.generation.top_p,
@@ -161,13 +181,16 @@ def main() -> int:
                     continue
                 full_ids = torch.cat([prompt_ids[0], gen_ids], dim=0).unsqueeze(0)
                 with torch.set_grad_enabled(True):
-                    out = model(full_ids)
+                    # No padding inside full_ids (single sequence), so attention_mask is all ones.
+                    full_attn = torch.ones_like(full_ids, dtype=torch.long, device=device)
+                    out = model(full_ids, attention_mask=full_attn)
                     if ref_on_cpu:
                         with torch.no_grad():
-                            ref_out = ref_model(full_ids.cpu())
-                        ref_logits = ref_out.logits[:, :-1, :].to(device)
+                            ref_out = ref_model(full_ids.cpu(), attention_mask=full_attn.cpu())
+                        ref_logits_cpu = ref_out.logits[:, :-1, :]
                     else:
-                        ref_out = ref_model(full_ids)
+                        with torch.no_grad():
+                            ref_out = ref_model(full_ids, attention_mask=full_attn)
                         ref_logits = ref_out.logits[:, :-1, :]
                     logits = out.logits[:, :-1, :]
                     target = full_ids[:, 1:]
@@ -176,8 +199,20 @@ def main() -> int:
                     mask = torch.zeros_like(target, dtype=torch.bool)
                     mask[:, prompt_len - 1 :] = True  # response tokens start at prompt_len
 
-                    logp = torch.log_softmax(logits, dim=-1).gather(-1, target.unsqueeze(-1)).squeeze(-1)
-                    ref_logp = torch.log_softmax(ref_logits, dim=-1).gather(-1, target.unsqueeze(-1)).squeeze(-1)
+                    # Compute per-token log-probs without materializing full log_softmax (saves VRAM).
+                    tok_logits = logits.gather(-1, target.unsqueeze(-1)).squeeze(-1)
+                    log_z = torch.logsumexp(logits, dim=-1)
+                    logp = tok_logits - log_z
+                    if ref_on_cpu:
+                        ref_target_cpu = target.cpu()
+                        ref_tok_logits_cpu = ref_logits_cpu.gather(-1, ref_target_cpu.unsqueeze(-1)).squeeze(-1)
+                        ref_log_z_cpu = torch.logsumexp(ref_logits_cpu, dim=-1)
+                        ref_logp = (ref_tok_logits_cpu - ref_log_z_cpu).to(device)
+                        del ref_logits_cpu
+                    else:
+                        ref_tok_logits = ref_logits.gather(-1, target.unsqueeze(-1)).squeeze(-1)
+                        ref_log_z = torch.logsumexp(ref_logits, dim=-1)
+                        ref_logp = ref_tok_logits - ref_log_z
 
                     logp_resp = logp[mask]
                     ref_logp_resp = ref_logp[mask]

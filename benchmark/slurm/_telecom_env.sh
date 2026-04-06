@@ -14,6 +14,10 @@ set -euo pipefail
 _SLURM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 export BENCHMARK_ROOT="$(cd "$_SLURM_DIR/.." && pwd)"
 
+if [[ -z "${PYTORCH_CUDA_ALLOC_CONF:-}" ]]; then
+  export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+fi
+
 if [[ -n "${BENCHMARK_ROOT_OVERRIDE:-}" ]]; then
   export BENCHMARK_ROOT="$(cd "${BENCHMARK_ROOT_OVERRIDE}" && pwd)"
 fi
@@ -134,11 +138,16 @@ fi
 
 export PYTHONPATH="$BENCHMARK_ROOT"
 
-# Minimal import checks before training / eval
+# Minimal import checks before training / eval (fail fast).
 if ! "$BENCHMARK_PYTHON" -c "import yaml, torch, transformers, trl; import src.config_loader" 2>/dev/null; then
   echo "[job] ERROR: core imports failed after pip install. Retry: pip install -r requirements.txt"
   "$BENCHMARK_PYTHON" -c "import yaml, torch, transformers, trl; import src.config_loader" || true
   exit 1
+fi
+
+# TRL DPOTrainer may import `weave` (wandb). Don't fail globally; DPO jobs will error clearly if missing.
+if ! "$BENCHMARK_PYTHON" -c "import weave" 2>/dev/null; then
+  echo "[job] WARN: `import weave` failed. If you run DPO with TRL and it errors, ensure `weave` installs in requirements."
 fi
 
 "$BENCHMARK_PYTHON" << 'PY'

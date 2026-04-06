@@ -77,30 +77,81 @@ def run_dpo(
     config: ExperimentConfig,
     preference_pairs: Sequence[PreferencePair],
 ) -> dict[str, Any]:
+    import os
+    import inspect
+    import torch
+
+    # Reduces allocator fragmentation on long runs (safe default if the job did not export it).
+    if "PYTORCH_CUDA_ALLOC_CONF" not in os.environ:
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
     from datasets import Dataset
-    from transformers import TrainingArguments
-    from trl import DPOTrainer
+    from trl import DPOConfig, DPOTrainer
+
+    if torch.cuda.is_available():
+        total_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        if not getattr(config.peft, "method", None) and total_gb < 30:
+            raise SystemExit(
+                "DPO OOM safeguard: full fine-tune of a 7B model is not stable on ~16GB GPUs.\n"
+                "Use QLoRA/LoRA instead (example for P100):\n"
+                "- model.quantization: nf4\n"
+                "- peft.method: lora (with target_modules)\n"
+                "- training.max_seq_length: 1024-2048\n"
+            )
 
     model, tokenizer = load_model_bundle(config.model, config.peft)
+    # Long XML + DPO concatenates chosen/rejected in one forward; cap length to limit attention memory.
+    max_length = min(int(config.training.max_seq_length), 4096)
+
+    model.config.use_cache = False
+    if hasattr(model, "gradient_checkpointing_enable"):
+        try:
+            model.gradient_checkpointing_enable()
+        except Exception:
+            pass
+    if hasattr(model, "enable_input_require_grads"):
+        model.enable_input_require_grads()
+
     dataset = Dataset.from_list([asdict(pair) for pair in preference_pairs])
-    args = TrainingArguments(
-        output_dir=config.training.output_dir,
-        per_device_train_batch_size=config.training.batch_size,
-        gradient_accumulation_steps=config.training.gradient_accumulation_steps,
-        learning_rate=config.training.learning_rate,
-        num_train_epochs=config.training.num_train_epochs,
-        logging_steps=config.training.logging_steps,
-        save_steps=config.training.save_steps,
-        report_to=[],
-    )
-    trainer = DPOTrainer(
-        model=model,
-        ref_model=None,
-        args=args,
-        beta=0.1,
-        train_dataset=dataset,
-        tokenizer=tokenizer,
-    )
+    # DPOConfig/DPOTrainer kwargs changed across TRL releases; only pass supported ones.
+    _cfg_sig = inspect.signature(DPOConfig.__init__)
+    _cfg_params = set(_cfg_sig.parameters.keys()) - {"self"}
+    _beta = 0.1
+    _dpo_cfg_kwargs = {
+        "output_dir": config.training.output_dir,
+        "per_device_train_batch_size": config.training.batch_size,
+        "gradient_accumulation_steps": config.training.gradient_accumulation_steps,
+        "learning_rate": config.training.learning_rate,
+        "num_train_epochs": config.training.num_train_epochs,
+        "logging_steps": getattr(config.training, "logging_steps", 10),
+        "save_steps": getattr(config.training, "save_steps", 200),
+        "report_to": [],
+        "beta": _beta,
+        "max_length": max_length,
+        # Avoid policy forward + ref forward in the same step (peak VRAM on ~16 GiB cards).
+        "precompute_ref_log_probs": True,
+        "precompute_ref_batch_size": 1,
+        "gradient_checkpointing": True,
+    }
+    args = DPOConfig(**{k: v for k, v in _dpo_cfg_kwargs.items() if k in _cfg_params})
+
+    _trainer_sig = inspect.signature(DPOTrainer.__init__)
+    _trainer_params = set(_trainer_sig.parameters.keys()) - {"self"}
+    _trainer_kwargs = {
+        "model": model,
+        "ref_model": None,
+        "args": args,
+        "train_dataset": dataset,
+    }
+    # Some TRL versions keep `beta` on the trainer instead of config.
+    if "beta" in _trainer_params and "beta" not in _cfg_params:
+        _trainer_kwargs["beta"] = _beta
+    # tokenizer kwarg name varies: `processing_class` (new) vs `tokenizer` (older)
+    if "processing_class" in _trainer_params:
+        _trainer_kwargs["processing_class"] = tokenizer
+    elif "tokenizer" in _trainer_params:
+        _trainer_kwargs["tokenizer"] = tokenizer
+    trainer = DPOTrainer(**_trainer_kwargs)
     train_output = trainer.train()
     trainer.save_model(config.training.output_dir)
     return {

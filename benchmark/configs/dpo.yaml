@@ -21,7 +21,8 @@ training:
   batch_size: 1
   gradient_accumulation_steps: 4
   num_train_epochs: 1.0
-  max_seq_length: 2048
+  # DPO stacks chosen+rejected; 2048 often OOMs on 16 GiB with 7B + LoRA. Raise if you have more VRAM.
+  max_seq_length: 1024
 generation:
   max_new_tokens: 768
   temperature: 0.8

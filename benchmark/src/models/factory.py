@@ -64,7 +64,22 @@ def load_base_model(config: ModelConfig) -> Any:
     }
     _dm = config.device_map
     if _dm is not None and str(_dm).strip().lower() not in {"", "none"}:
-        kwargs["device_map"] = _dm
+        # `device_map` values like "cuda:0" are common in configs but are NOT valid
+        # Transformers `device_map` strings (which are usually "auto"/"balanced"...).
+        # Convert "cuda[:N]" to a single-device map to avoid accelerate sharding/offload.
+        if isinstance(_dm, str):
+            _dms = _dm.strip().lower()
+            if _dms.startswith("cuda"):
+                try:
+                    idx = int(_dms.split(":", 1)[1]) if ":" in _dms else 0
+                    kwargs["device_map"] = {"": idx}
+                except Exception:
+                    # Fall back to no device_map (Trainer / downstream .to(device) will handle placement).
+                    pass
+            elif _dms in {"auto", "balanced", "balanced_low_0", "sequential"}:
+                kwargs["device_map"] = _dm
+        else:
+            kwargs["device_map"] = _dm
     # Prefer `dtype` (Transformers >= ~4.46); `torch_dtype` triggers a deprecation warning.
     _from_pretrained = AutoModelForCausalLM.from_pretrained
     if "dtype" in inspect.signature(_from_pretrained).parameters:
