@@ -114,6 +114,114 @@ CONDITION_SKILLS = frozenset(
     }
 )
 
+# ─── Catalogue des ports par skill ─────────────────────────────────────────────
+# Dérivé du SKILLS_DOC de generate_dataset_llm.py + few-shot example
+
+SKILL_PORTS: dict[str, dict] = {
+    # PREPARATION
+    "LoadMission": {
+        "required": ["mission_file_path"],
+        "types": {"mission_file_path": "bb_var"},
+    },
+    "MissionStructureValid": {"required": []},
+    "UpdateCurrentGeneratedActivity": {
+        "required": ["type", "origin_sph", "target_sph", "forbidden_atoms_out"],
+        "types": {
+            "type": "bb_var",
+            "origin_sph": "bb_var",
+            "target_sph": "bb_var",
+            "forbidden_atoms_out": "bb_var",
+        },
+    },
+    "ProjectPointOnNetwork": {
+        "required": ["point_in", "point_out"],
+        "types": {"point_in": "bb_var", "point_out": "bb_var"},
+    },
+    "CreatePath": {
+        "required": ["origin", "target", "forbidden_atoms", "path"],
+        "types": {
+            "origin": "bb_var",
+            "target": "bb_var",
+            "forbidden_atoms": "bb_var",
+            "path": "bb_var",
+        },
+    },
+    "AgregatePath": {"required": ["path"], "types": {"path": "bb_var"}},
+    "MissionFullyTreated": {"required": ["type"], "types": {"type": "bb_var"}},
+    "PassAdvancedPath": {"required": ["adv_path"], "types": {"adv_path": "bb_var"}},
+    "PassMission": {"required": ["mission"], "types": {"mission": "bb_var"}},
+    "GenerateMissionSequence": {
+        "required": ["mission", "mission_sequence"],
+        "types": {"mission": "bb_var", "mission_sequence": "bb_var"},
+    },
+    "GenerateCorrectiveSubSequence": {
+        "required": ["defects"],
+        "types": {"defects": "bb_var"},
+    },
+    "InsertCorrectiveSubSequence": {"required": []},
+    # MOTION
+    "MissionTerminated": {"required": []},
+    "CheckCurrentStepType": {
+        "required": ["type_to_be_checked"],
+        "types": {"type_to_be_checked": "int_literal"},
+        "allowed": {
+            "type_to_be_checked": {
+                "0",
+                "1",
+                "2",
+                "3",
+                "4",
+                "10",
+                "11",
+                "12",
+                "13",
+                "14",
+            }
+        },
+    },
+    "PassMotionParameters": {
+        "required": ["motion_params"],
+        "types": {"motion_params": "bb_var"},
+    },
+    "Move": {
+        "required": ["threshold_type", "motion_params"],
+        "types": {"threshold_type": "int_literal", "motion_params": "bb_var"},
+        "allowed": {"threshold_type": {"1", "3"}},
+    },
+    "UpdateCurrentExecutedStep": {"required": []},
+    "Deccelerate": {
+        "required": ["motion_params"],
+        "types": {"motion_params": "bb_var"},
+    },
+    "MoveAndStop": {
+        "required": ["motion_params"],
+        "types": {"motion_params": "bb_var"},
+    },
+    "SignalAndWaitForOrder": {
+        "required": ["message"],
+        "types": {"message": "string_literal"},
+    },
+    "IsRobotPoseProjectionActive": {
+        "required": ["adv_path", "pub_proj"],
+        "types": {"adv_path": "bb_var", "pub_proj": "bb_var"},
+    },
+    "Pause": {"required": ["duration"], "types": {"duration": "float_literal"}},
+    # INSPECTION
+    "ManageMeasurements": {"required": []},
+    "AnalyseMeasurements": {"required": []},
+    "MeasurementsQualityValidated": {"required": []},
+    "PassDefectsLocalization": {
+        "required": ["defects"],
+        "types": {"defects": "bb_var"},
+    },
+    "MeasurementsEnforcedValidated": {"required": []},
+    # SIMULATION
+    "SimulationStarted": {"required": []},
+}
+
+# Attributs non-fonctionnels (présents sur tous les nœuds, pas des ports)
+_META_ATTRS = frozenset({"name", "ID"})
+
 # Précédences partielles : skill → skills qui doivent le précéder
 PREREQUISITES: dict[str, list[str]] = {
     "MissionStructureValid": ["LoadMission"],
@@ -372,12 +480,96 @@ def _validate_l3(root: ET.Element, result: ValidationResult):
             )
 
 
+# ─── Niveau 4 — Ports ─────────────────────────────────────────────────────────
+
+
+def _validate_l4(root: ET.Element, result: ValidationResult):
+    """Vérifications des ports : attributs requis, types, valeurs licites."""
+
+    for elem in root.iter():
+        if elem.tag not in ("Action", "Condition"):
+            continue
+        skill_id = elem.get("ID", "")
+        if skill_id not in SKILL_PORTS:
+            continue  # L1 attrape déjà les skills inconnus
+
+        spec = SKILL_PORTS[skill_id]
+        required = spec.get("required", [])
+        types = spec.get("types", {})
+        allowed = spec.get("allowed", {})
+        node_attrs = {k: v for k, v in elem.attrib.items() if k not in _META_ATTRS}
+
+        # Ports requis manquants
+        for port in required:
+            if port not in node_attrs:
+                result.warn(
+                    f'[L4] <{elem.tag} ID="{skill_id}"> : port requis "{port}" manquant'
+                )
+
+        # Attributs inconnus
+        known_ports = set(required)
+        for attr in node_attrs:
+            if attr not in known_ports and attr not in types:
+                result.warn(
+                    f'[L4] <{elem.tag} ID="{skill_id}"> : attribut inconnu "{attr}"'
+                )
+
+        # Type + valeur
+        for port, ptype in types.items():
+            val = node_attrs.get(port)
+            if val is None:
+                continue
+            if ptype == "bb_var":
+                if not (val.startswith("{") and val.endswith("}")):
+                    result.warn(
+                        f'[L4] <{elem.tag} ID="{skill_id}"> : '
+                        f'port "{port}" devrait être {{variable}}, reçu "{val}"'
+                    )
+            elif ptype == "int_literal":
+                try:
+                    int(val)
+                except ValueError:
+                    result.warn(
+                        f'[L4] <{elem.tag} ID="{skill_id}"> : '
+                        f'port "{port}" devrait être un entier, reçu "{val}"'
+                    )
+            elif ptype == "float_literal":
+                try:
+                    float(val)
+                except ValueError:
+                    result.warn(
+                        f'[L4] <{elem.tag} ID="{skill_id}"> : '
+                        f'port "{port}" devrait être un flottant, reçu "{val}"'
+                    )
+            # Valeurs autorisées
+            if port in allowed and val not in allowed[port]:
+                result.warn(
+                    f'[L4] <{elem.tag} ID="{skill_id}"> : '
+                    f'port "{port}"="{val}" hors domaine '
+                    f"{sorted(allowed[port])}"
+                )
+
+    # SubTreePlus : ID + __autoremap requis
+    for elem in root.iter("SubTreePlus"):
+        if not elem.get("ID"):
+            result.warn("[L4] <SubTreePlus> sans attribut ID")
+        if elem.get("__autoremap") is None:
+            result.warn(
+                f'[L4] <SubTreePlus ID="{elem.get("ID", "?")}"> sans __autoremap'
+            )
+
+    # Repeat : num_cycles requis
+    for elem in root.iter("Repeat"):
+        if elem.get("num_cycles") is None:
+            result.warn(f'[L4] <Repeat name="{elem.get("name", "?")}"> sans num_cycles')
+
+
 # ─── API publique ─────────────────────────────────────────────────────────────
 
 
 def validate_bt(xml_str: str) -> ValidationResult:
     """
-    Valide un BT XML NAV4RAIL sur 3 niveaux.
+    Valide un BT XML NAV4RAIL sur 4 niveaux.
 
     Returns:
         ValidationResult avec valid, errors, warnings, score
@@ -401,7 +593,25 @@ def validate_bt(xml_str: str) -> ValidationResult:
 
     # Niveau 3
     _validate_l3(root, result)
+
+    # Niveau 4
+    _validate_l4(root, result)
+
     return result
+
+
+def validate_ports(xml_str: str) -> list[str]:
+    """Valide uniquement les ports (L4). Retourne la liste des issues."""
+    xml_str = xml_str.strip()
+    if xml_str.startswith("<?xml"):
+        xml_str = xml_str[xml_str.index("?>") + 2 :].strip()
+    try:
+        root = ET.fromstring(xml_str)
+    except ET.ParseError:
+        return ["XML mal formé"]
+    result = ValidationResult()
+    _validate_l4(root, result)
+    return result.warnings
 
 
 def validate_xml(xml_str: str) -> tuple[bool, str]:
