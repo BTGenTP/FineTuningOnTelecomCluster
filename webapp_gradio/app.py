@@ -701,12 +701,12 @@ def generate_bt(
     # Determine target URL
     if cluster_choice == "dataia25":
         progress(0.05, desc="Connexion à DataIA25...")
-        tunnel_ok = _provision_dataia25_tunnel()
-        if not tunnel_ok:
+        dataia25_ok = _provision_dataia25(progress)
+        if not dataia25_ok:
             return (
                 "",
                 "",
-                "DataIA25 inaccessible. Le serveur est peut-être éteint (auto-shutdown 15min).",
+                "DataIA25 inaccessible. Vérifiez le VPN et la machine dataia25.",
                 "",
             )
         target_url = DATAIA25_URL
@@ -990,18 +990,15 @@ def _get_available_models() -> list[str]:
     return list(MODEL_LABELS.keys())
 
 
-def _provision_dataia25_tunnel() -> bool:
+def _ensure_dataia25_tunnel() -> bool:
     """Ensure SSH tunnel to dataia25 is up (localhost:8081 -> dataia25:8080)."""
-    # Check if tunnel already works
     info = _get_cluster_info_from(DATAIA25_URL)
     if info:
         return True
 
-    # Kill stale tunnel
     _run(f"pkill -f 'ssh.*-L 8081:localhost:{DATAIA25_PORT}' 2>/dev/null")
     time.sleep(0.5)
 
-    # Open tunnel via RPi5 VPN to dataia25
     rc, _ = _run(
         f"ssh -fN -L 8081:localhost:{DATAIA25_PORT} dataia25 "
         f"-o ConnectTimeout=5 -o ServerAliveInterval=30 "
@@ -1009,7 +1006,6 @@ def _provision_dataia25_tunnel() -> bool:
         timeout=10,
     )
     if rc != 0:
-        # Fallback: try via proxy jump through localhost (RPi5 is localhost)
         _run(
             f"nohup ssh -N -L 8081:{DATAIA25_HOST}:{DATAIA25_PORT} localhost "
             f"-o ServerAliveInterval=30 -o ServerAliveCountMax=3 "
@@ -1018,12 +1014,65 @@ def _provision_dataia25_tunnel() -> bool:
         )
         time.sleep(2)
 
-    # Verify
     for _ in range(3):
-        info = _get_cluster_info_from(DATAIA25_URL)
-        if info:
+        if _get_cluster_info_from(DATAIA25_URL):
             return True
         time.sleep(1)
+    return False
+
+
+def _provision_dataia25(progress=gr.Progress()) -> bool:
+    """Full auto-provisioning: tunnel + start server if needed + wait for ready."""
+    # 1) Fast path: server already running and tunnel up
+    if _ensure_dataia25_tunnel():
+        return True
+
+    # 2) SSH to dataia25 and check if serve process is running
+    progress(0.1, desc="Vérification du serveur DataIA25...")
+    rc, out = _run(
+        "ssh -o ConnectTimeout=5 dataia25 "
+        "'pgrep -af \"python.*run_serve_hf_mistral\" || echo NO_PROCESS'",
+        timeout=10,
+    )
+    server_running = rc == 0 and "NO_PROCESS" not in out
+
+    # 3) Start the serve script if not running
+    if not server_running:
+        progress(0.15, desc="Démarrage du serveur Mistral fp16 sur DataIA25...")
+        rc, _ = _run(
+            "ssh -o ConnectTimeout=5 dataia25 "
+            "'cd ~/nav4rail && nohup bash run_serve_hf_mistral.sh "
+            "> serve_hf_mistral.log 2>&1 & disown'",
+            timeout=15,
+        )
+        if rc != 0:
+            return False
+
+    # 4) Wait for the server to become ready (loading model takes ~30-60s)
+    progress(0.25, desc="Chargement du modèle sur le GPU (~30s)...")
+    for attempt in range(24):  # up to ~120s
+        progress(
+            0.25 + attempt * 0.025,
+            desc=f"Chargement du modèle... ({(attempt + 1) * 5}s)",
+        )
+        time.sleep(5)
+        # Check directly via SSH (tunnel may not be up yet)
+        rc, health = _run(
+            f"ssh -o ConnectTimeout=3 dataia25 "
+            f"'curl -s --max-time 3 http://localhost:{DATAIA25_PORT}/health'",
+            timeout=10,
+        )
+        if '"status":"ok"' in health:
+            break
+    else:
+        return False
+
+    # 5) Ensure tunnel is up
+    progress(0.9, desc="Ouverture du tunnel SSH...")
+    if _ensure_dataia25_tunnel():
+        progress(1.0, desc="DataIA25 prêt !")
+        return True
+
     return False
 
 
