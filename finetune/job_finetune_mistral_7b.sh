@@ -33,6 +33,7 @@ fi
 source "$VENV_DIR/bin/activate"
 
 # ─── HuggingFace cache ──────────────────────────────────────────────────────
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
 export TRANSFORMERS_CACHE="$HF_HOME/hub"
@@ -40,17 +41,21 @@ export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$HOME/.cache/pip}"
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 mkdir -p "$HF_HUB_CACHE" "$PIP_CACHE_DIR"
 
-# ─── Dependencies (already installed if llama3 ran first) ────────────────────
-pip install --upgrade pip
-pip install \
-  "torch==2.3.0" \
-  "transformers==4.44.0" \
-  "peft==0.12.0" \
-  "trl==0.10.1" \
-  "bitsandbytes==0.43.3" \
-  "datasets==2.21.0" \
-  "accelerate==0.34.0" \
-  "scipy" "sentencepiece" "protobuf" "rich"
+# ─── Dependencies (flock for concurrent safety) ────────────────────────────
+echo "[job] Installing dependencies..."
+(
+  flock -w 600 200 || { echo "[job] Could not acquire pip lock"; exit 1; }
+  pip install --upgrade pip
+  pip install \
+    "torch==2.3.0" \
+    "transformers==4.44.0" \
+    "peft==0.12.0" \
+    "trl==0.10.1" \
+    "bitsandbytes==0.43.3" \
+    "datasets==2.21.0" \
+    "accelerate==0.34.0" \
+    "scipy" "sentencepiece" "protobuf" "rich"
+) 200>"$VENV_DIR/.pip_lock"
 
 # ─── Verify dataset ─────────────────────────────────────────────────────────
 if [ ! -f "$DATASET" ]; then
@@ -70,9 +75,9 @@ python3 finetune_llama3_nav4rail.py \
   --output-dir "$OUT_DIR" \
   --epochs 10 \
   --lr 2e-4 \
-  --batch-size 2 \
-  --grad-accum 8 \
-  --max-seq-len 8192 \
+  --batch-size 1 \
+  --grad-accum 16 \
+  --max-seq-len 4096 \
   --lora-r 16
 
 echo "================================================================"

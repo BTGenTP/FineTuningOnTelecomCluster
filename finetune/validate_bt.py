@@ -1,14 +1,13 @@
 """
-Validateur multi-niveaux pour Behavior Trees NAV4RAIL — format BehaviorTree.CPP
+Validateur multi-niveaux pour Behavior Trees NAV4RAIL
 ================================================================================
 
-Format attendu (BehaviorTree.CPP standard) :
-  <Action name="HUMAN NAME" ID="SkillName" port="{var}"/>
-  <Condition name="HUMAN NAME" ID="SkillName" port="{var}"/>
-  <SubTreePlus name="HUMAN NAME" ID="subtree_id" __autoremap="true"/>
+Formats acceptés :
+  v5 (BehaviorTree.CPP) : <Action name="HUMAN NAME" ID="SkillName" port="{var}"/>
+  v4 (proxy)            : <SkillName name="human name" port="{var}"/>
 
 Niveau 1 — Syntaxique  : XML bien formé, BTCPP_format="4", tags valides,
-                          skills via ID attr, MoveAndStop présent
+                          skills (tag ou ID attr), MoveAndStop présent
 Niveau 2 — Structurel  : Nœuds de contrôle vides, profondeur excessive,
                           Fallback (≥ 2 branches), <BehaviorTree> présent
 Niveau 3 — Sémantique  : Ordre des skills (LoadMission en premier),
@@ -222,6 +221,14 @@ SKILL_PORTS: dict[str, dict] = {
 # Attributs non-fonctionnels (présents sur tous les nœuds, pas des ports)
 _META_ATTRS = frozenset({"name", "ID"})
 
+
+def _l4_label(elem: ET.Element, skill_id: str) -> str:
+    """Label lisible pour les messages L4 (v4: <Skill>, v5: <Action ID='Skill'>)."""
+    if elem.tag in VALID_SKILLS:
+        return elem.tag
+    return f'{elem.tag} ID="{skill_id}"'
+
+
 # Précédences partielles : skill → skills qui doivent le précéder
 PREREQUISITES: dict[str, list[str]] = {
     "MissionStructureValid": ["LoadMission"],
@@ -267,20 +274,24 @@ class ValidationResult:
 def _resolve_skill(elem: ET.Element) -> str | None:
     """Résout le nom du skill depuis un élément XML.
 
-    Format BehaviorTree.CPP : <Action ID="MoveAndStop" name="FINAL STOP" .../>
-    Retourne le skill ID si c'est un Action/Condition avec un ID valide.
+    Format v5 (BehaviorTree.CPP) : <Action ID="MoveAndStop" name="FINAL STOP" .../>
+    Format v4 (proxy)            : <MoveAndStop name="..."/>
     """
     if elem.tag in ("Action", "Condition"):
         skill_id = elem.get("ID", "")
         return skill_id if skill_id in VALID_SKILLS else None
+    if elem.tag in VALID_SKILLS:
+        return elem.tag
     return None
 
 
 def _is_condition(elem: ET.Element) -> str | None:
-    """Retourne le skill ID si c'est une Condition valide."""
+    """Retourne le skill ID si c'est une Condition valide (v4 ou v5)."""
     if elem.tag == "Condition":
         skill_id = elem.get("ID", "")
         return skill_id if skill_id in CONDITION_SKILLS else None
+    if elem.tag in CONDITION_SKILLS:
+        return elem.tag
     return None
 
 
@@ -310,13 +321,14 @@ def _validate_l1(xml_str: str) -> tuple[bool, ET.Element | None, str]:
     elif btcpp_fmt != "4":
         _btcpp_warning = f"BTCPP_format='{btcpp_fmt}' inattendu (attendu: '4')"
 
-    # Vérifier que tous les tags sont dans la liste
+    # Vérifier que tous les tags sont dans la liste (accepter v4 skill-as-tag ET v5 Action/Condition)
+    _all_valid_tags = VALID_TAGS | VALID_SKILLS
     unknown_tags = set()
     unknown_skills = set()
     for e in root.iter():
-        if e.tag not in VALID_TAGS:
+        if e.tag not in _all_valid_tags:
             unknown_tags.add(e.tag)
-        # Vérifier que Action/Condition ont un ID de skill valide
+        # Vérifier que Action/Condition (v5) ont un ID de skill valide
         if e.tag in ("Action", "Condition"):
             skill_id = e.get("ID", "")
             if skill_id and skill_id not in VALID_SKILLS:
@@ -331,15 +343,16 @@ def _validate_l1(xml_str: str) -> tuple[bool, ET.Element | None, str]:
             f"Skills inconnus (hallucinations) : {sorted(unknown_skills)}",
         )
 
-    # MoveAndStop doit être présent
+    # MoveAndStop doit être présent (v5: <Action ID="MoveAndStop">, v4: <MoveAndStop>)
     has_move_and_stop = any(
-        e.tag == "Action" and e.get("ID") == "MoveAndStop" for e in root.iter()
+        (e.tag == "Action" and e.get("ID") == "MoveAndStop") or e.tag == "MoveAndStop"
+        for e in root.iter()
     )
     if not has_move_and_stop:
         return (
             False,
             None,
-            '<Action ID="MoveAndStop"> absent — le BT ne se termine jamais',
+            "MoveAndStop absent — le BT ne se termine jamais",
         )
 
     return True, root, _btcpp_warning or "OK"
@@ -475,7 +488,7 @@ def _validate_l3(root: ET.Element, result: ValidationResult):
     for cond in conditions_present & loop_conditions:
         if cond not in conditions_in_fb:
             result.warn(
-                f'<Condition ID="{cond}"> hors de tout Fallback — '
+                f"<{cond}> hors de tout Fallback — "
                 f"son signal FAILURE ne sera pas intercepté correctement"
             )
 
@@ -487,9 +500,13 @@ def _validate_l4(root: ET.Element, result: ValidationResult):
     """Vérifications des ports : attributs requis, types, valeurs licites."""
 
     for elem in root.iter():
-        if elem.tag not in ("Action", "Condition"):
+        # v5: <Action ID="Skill">, v4: <Skill ...>
+        if elem.tag in ("Action", "Condition"):
+            skill_id = elem.get("ID", "")
+        elif elem.tag in VALID_SKILLS:
+            skill_id = elem.tag
+        else:
             continue
-        skill_id = elem.get("ID", "")
         if skill_id not in SKILL_PORTS:
             continue  # L1 attrape déjà les skills inconnus
 
@@ -503,7 +520,7 @@ def _validate_l4(root: ET.Element, result: ValidationResult):
         for port in required:
             if port not in node_attrs:
                 result.warn(
-                    f'[L4] <{elem.tag} ID="{skill_id}"> : port requis "{port}" manquant'
+                    f'[L4] <{_l4_label(elem, skill_id)}> : port requis "{port}" manquant'
                 )
 
         # Attributs inconnus
@@ -511,7 +528,7 @@ def _validate_l4(root: ET.Element, result: ValidationResult):
         for attr in node_attrs:
             if attr not in known_ports and attr not in types:
                 result.warn(
-                    f'[L4] <{elem.tag} ID="{skill_id}"> : attribut inconnu "{attr}"'
+                    f'[L4] <{_l4_label(elem, skill_id)}> : attribut inconnu "{attr}"'
                 )
 
         # Type + valeur
@@ -519,10 +536,11 @@ def _validate_l4(root: ET.Element, result: ValidationResult):
             val = node_attrs.get(port)
             if val is None:
                 continue
+            _label = _l4_label(elem, skill_id)
             if ptype == "bb_var":
                 if not (val.startswith("{") and val.endswith("}")):
                     result.warn(
-                        f'[L4] <{elem.tag} ID="{skill_id}"> : '
+                        f"[L4] <{_label}> : "
                         f'port "{port}" devrait être {{variable}}, reçu "{val}"'
                     )
             elif ptype == "int_literal":
@@ -530,7 +548,7 @@ def _validate_l4(root: ET.Element, result: ValidationResult):
                     int(val)
                 except ValueError:
                     result.warn(
-                        f'[L4] <{elem.tag} ID="{skill_id}"> : '
+                        f"[L4] <{_label}> : "
                         f'port "{port}" devrait être un entier, reçu "{val}"'
                     )
             elif ptype == "float_literal":
@@ -538,13 +556,13 @@ def _validate_l4(root: ET.Element, result: ValidationResult):
                     float(val)
                 except ValueError:
                     result.warn(
-                        f'[L4] <{elem.tag} ID="{skill_id}"> : '
+                        f"[L4] <{_label}> : "
                         f'port "{port}" devrait être un flottant, reçu "{val}"'
                     )
             # Valeurs autorisées
             if port in allowed and val not in allowed[port]:
                 result.warn(
-                    f'[L4] <{elem.tag} ID="{skill_id}"> : '
+                    f"[L4] <{_label}> : "
                     f'port "{port}"="{val}" hors domaine '
                     f"{sorted(allowed[port])}"
                 )
@@ -618,6 +636,93 @@ def validate_xml(xml_str: str) -> tuple[bool, str]:
     """Interface rétro-compatible avec l'ancienne validate_xml() de finetune_lora_xml.py."""
     r = validate_bt(xml_str)
     return r.valid, r.summary()
+
+
+# ─── Post-traitement : injection des ports blackboard ──────────────────────────
+
+# Valeurs par défaut des ports (blackboard variables ou littéraux)
+_DEFAULT_PORT_VALUES: dict[str, dict[str, str]] = {
+    "LoadMission": {"mission_file_path": "{mission_file_path}"},
+    "UpdateCurrentGeneratedActivity": {
+        "type": "{type}",
+        "origin_sph": "{origin_sph}",
+        "target_sph": "{target_sph}",
+        "forbidden_atoms_out": "{forbidden_atoms}",
+    },
+    "ProjectPointOnNetwork": {"point_in": "{point_in}", "point_out": "{point_out}"},
+    "CreatePath": {
+        "origin": "{origin}",
+        "target": "{target}",
+        "forbidden_atoms": "{forbidden_atoms}",
+        "path": "{path}",
+    },
+    "AgregatePath": {"path": "{path}"},
+    "MissionFullyTreated": {"type": "{type}"},
+    "PassAdvancedPath": {"adv_path": "{adv_path}"},
+    "PassMission": {"mission": "{mission}"},
+    "GenerateMissionSequence": {
+        "mission": "{mission}",
+        "mission_sequence": "{mission_sequence}",
+    },
+    "GenerateCorrectiveSubSequence": {"defects": "{defects}"},
+    "CheckCurrentStepType": {"type_to_be_checked": "0"},
+    "PassMotionParameters": {"motion_params": "{motion_params}"},
+    "Move": {"threshold_type": "1", "motion_params": "{motion_params}"},
+    "Deccelerate": {"motion_params": "{motion_params}"},
+    "MoveAndStop": {"motion_params": "{motion_params}"},
+    "SignalAndWaitForOrder": {"message": "waiting_for_order"},
+    "IsRobotPoseProjectionActive": {
+        "adv_path": "{adv_path}",
+        "pub_proj": "{pub_proj}",
+    },
+    "Pause": {"duration": "2.0"},
+    "PassDefectsLocalization": {"defects": "{defects}"},
+}
+
+
+def enrich_ports(xml_str: str) -> str:
+    """Injecte les ports blackboard par défaut sur les nœuds qui n'en ont pas.
+
+    Accepte les deux formats :
+      v4 (proxy)  : <MoveAndStop name="stop"/>  → ajoute motion_params="{motion_params}"
+      v5 (BTCPP)  : <Action ID="MoveAndStop"/>  → idem
+
+    Ne modifie pas les ports déjà présents.
+    Retourne le XML enrichi (ou l'original si le parsing échoue).
+    """
+    xml_clean = xml_str.strip()
+    if xml_clean.startswith("<?xml"):
+        xml_clean = xml_clean[xml_clean.index("?>") + 2 :].strip()
+    try:
+        root = ET.fromstring(xml_clean)
+    except ET.ParseError:
+        return xml_str  # XML invalide → retourner tel quel
+
+    modified = False
+    for elem in root.iter():
+        # Résoudre le skill_id selon le format
+        if elem.tag in ("Action", "Condition"):
+            skill_id = elem.get("ID", "")
+        elif elem.tag in VALID_SKILLS:
+            skill_id = elem.tag
+        else:
+            continue
+
+        defaults = _DEFAULT_PORT_VALUES.get(skill_id)
+        if not defaults:
+            continue
+
+        for port, default_val in defaults.items():
+            if port not in elem.attrib:
+                elem.set(port, default_val)
+                modified = True
+
+    if not modified:
+        return xml_str
+
+    # Sérialiser avec indentation propre
+    ET.indent(root, space="  ")
+    return ET.tostring(root, encoding="unicode")
 
 
 # ─── CLI autonome ─────────────────────────────────────────────────────────────

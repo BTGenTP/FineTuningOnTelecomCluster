@@ -13,6 +13,7 @@ import json
 import re
 import subprocess
 import sys
+import threading
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -36,14 +37,31 @@ from bt_visualizer import render_bt_html, render_bt_full_html  # noqa: E402
 
 # ─── Cluster config (same as FastAPI webapp) ────────────────────────────────
 
-CLUSTER_URL = "http://localhost:8080"
+TELECOM_URL = "http://localhost:8080"
+DATAIA25_URL = "http://localhost:8081"
 MAX_TIME_S = 900
 GPU_HOST = "gpu"
+DATAIA25_HOST = "192.168.80.211"
+DATAIA25_PORT = 8080
 REMOTE_USER = "blepourt-25"
-REMOTE_MODEL = (
-    f"/home/infres/{REMOTE_USER}/code/nav4rail_finetune/nav4rail-mistral-7b-q4_k_m.gguf"
-)
+REMOTE_MODEL_DIR = f"/home/infres/{REMOTE_USER}/models"
 CLUSTER_PORT = 8080
+
+# Active cluster URL — updated dynamically
+CLUSTER_URL = TELECOM_URL
+
+MODEL_LABELS = {
+    "mistral-7b": "Mistral 7B v0.2",
+    "mistral-7b-merged-fp16": "Mistral 7B v0.2 (fp16 merged)",
+    "llama3-8b": "Llama 3.1 8B",
+    "qwen-coder-7b": "Qwen 2.5 Coder 7B",
+    "qwen-14b": "Qwen 2.5 14B",
+    "gemma2-9b": "Gemma 2 9B",
+}
+
+# Models available per cluster
+TELECOM_MODELS = {k for k in MODEL_LABELS if k != "mistral-7b-merged-fp16"}
+DATAIA25_MODELS = {"mistral-7b-merged-fp16"}
 
 HISTORY_PATH = APP_DIR / "history.json"
 ROOT_PATH = "/btgenerator_gradio"
@@ -156,10 +174,30 @@ def _compute_stats(samples: list[dict]) -> dict:
         "total": len(samples),
         "categories": {c: cats.get(c, 0) for c in _CAT_ORDER},
         "scores": dict(sorted(scores.items(), reverse=True)),
-        "nodes": {"min": min(nodes), "avg": mean(nodes), "med": median(nodes), "max": max(nodes)},
-        "subtrees": {"min": min(subtrees), "avg": mean(subtrees), "med": median(subtrees), "max": max(subtrees)},
-        "leaf_nodes": {"min": min(leaf), "avg": mean(leaf), "med": median(leaf), "max": max(leaf)},
-        "xml_size": {"min": min(sizes), "avg": mean(sizes), "med": median(sizes), "max": max(sizes)},
+        "nodes": {
+            "min": min(nodes),
+            "avg": mean(nodes),
+            "med": median(nodes),
+            "max": max(nodes),
+        },
+        "subtrees": {
+            "min": min(subtrees),
+            "avg": mean(subtrees),
+            "med": median(subtrees),
+            "max": max(subtrees),
+        },
+        "leaf_nodes": {
+            "min": min(leaf),
+            "avg": mean(leaf),
+            "med": median(leaf),
+            "max": max(leaf),
+        },
+        "xml_size": {
+            "min": min(sizes),
+            "avg": mean(sizes),
+            "med": median(sizes),
+            "max": max(sizes),
+        },
         "port_ok": port_ok,
         "port_issues_total": port_issues_total,
     }
@@ -261,7 +299,7 @@ def _build_stats_html(stats: dict) -> str:
         scores_html += (
             f'<span style="background:{color};color:white;padding:2px 10px;'
             f'border-radius:4px;margin-right:8px;font-size:13px;">'
-            f'Score {score_val} — {count} samples ({count/total*100:.1f}%)</span>'
+            f"Score {score_val} — {count} samples ({count / total * 100:.1f}%)</span>"
         )
 
     # Complexity table
@@ -305,7 +343,7 @@ def _build_stats_html(stats: dict) -> str:
                 <div style="font-size:12px;color:#fde68a;">catégories</div>
             </div>
             <div style="background:#1e3a5f;padding:12px 20px;border-radius:8px;text-align:center;">
-                <div style="font-size:28px;font-weight:bold;color:{'#4ade80' if stats.get('port_ok', 0) == total else '#fbbf24'};">{stats.get('port_ok', 0)}/{total}</div>
+                <div style="font-size:28px;font-weight:bold;color:{"#4ade80" if stats.get("port_ok", 0) == total else "#fbbf24"};">{stats.get("port_ok", 0)}/{total}</div>
                 <div style="font-size:12px;color:#93c5fd;">L4 Ports OK</div>
             </div>
         </div>
@@ -387,7 +425,7 @@ def _render_sample(sample: dict, idx_in_filtered: int, total_filtered: int) -> t
         f'<span style="background:{badge_color};color:white;padding:3px 10px;'
         f'border-radius:5px;font-size:13px;font-weight:600;">Score {score}</span>'
         f' <span style="color:#9ca3af;font-size:12px;margin-left:8px;">'
-        f'{nodes} nœuds · {subtrees} sous-arbres · {sample.get("xml_size", 0)} chars'
+        f"{nodes} nœuds · {subtrees} sous-arbres · {sample.get('xml_size', 0)} chars"
         f"</span>"
     )
 
@@ -398,15 +436,14 @@ def _render_sample(sample: dict, idx_in_filtered: int, total_filtered: int) -> t
             '<div style="margin-top:8px;padding:8px;background:#422006;'
             'border:1px solid #92400e;border-radius:6px;font-size:12px;">'
             f'<span style="color:#fbbf24;font-weight:600;">'
-            f'⚠ L4 Ports — {len(port_issues)} issue(s)</span><br>'
+            f"⚠ L4 Ports — {len(port_issues)} issue(s)</span><br>"
         )
         for iss in port_issues[:5]:
             iss_escaped = iss.replace("<", "&lt;").replace(">", "&gt;")
             port_html += f'<span style="color:#fde68a;">{iss_escaped}</span><br>'
         if len(port_issues) > 5:
             port_html += (
-                f'<span style="color:#9ca3af;">'
-                f"… +{len(port_issues) - 5} autres</span>"
+                f'<span style="color:#9ca3af;">… +{len(port_issues) - 5} autres</span>'
             )
         port_html += "</div>"
     else:
@@ -426,13 +463,28 @@ def ds_apply_filters(category, score_filter, search_text, port_filter="Tous"):
     """Apply filters, return updated state + first sample display + slider update."""
     filtered = _filter_dataset(category, score_filter, search_text, port_filter)
     if not filtered:
-        empty = ("**0 résultats**", "<p>Aucun sample ne correspond aux filtres.</p>", "", "", "", "", "")
-        return filtered, 0, gr.update(minimum=1, maximum=1, value=1, label="Sample 0/0"), *empty
+        empty = (
+            "**0 résultats**",
+            "<p>Aucun sample ne correspond aux filtres.</p>",
+            "",
+            "",
+            "",
+            "",
+            "",
+        )
+        return (
+            filtered,
+            0,
+            gr.update(minimum=1, maximum=1, value=1, label="Sample 0/0"),
+            *empty,
+        )
 
     _, sample = filtered[0]
     display = _render_sample(sample, 0, len(filtered))
     slider_update = gr.update(
-        minimum=1, maximum=len(filtered), value=1,
+        minimum=1,
+        maximum=len(filtered),
+        value=1,
         label=f"Sample (1–{len(filtered)})",
     )
     return filtered, 0, slider_update, *display
@@ -513,6 +565,14 @@ def _check_cluster() -> bool:
         return False
 
 
+def _check_dataia25() -> bool:
+    try:
+        r = httpx.get(f"{DATAIA25_URL}/health", timeout=3)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
 def _provision_cluster(progress=gr.Progress()) -> bool:
     """Ensure VPN + route + SLURM job + SSH tunnel are up."""
     if _check_cluster():
@@ -554,7 +614,7 @@ def _provision_cluster(progress=gr.Progress()) -> bool:
         progress(0.35, desc="Soumission du job GPU...")
         rc, job_out = _run(
             f"ssh {GPU_HOST} 'cd ~/nav4rail_serve && "
-            f"MODEL_PATH={REMOTE_MODEL} sbatch --parsable job_serve_final.sh'",
+            f"MODEL_DIR={REMOTE_MODEL_DIR} sbatch --parsable job_serve.sh'",
             timeout=15,
         )
         job_id = job_out.strip()
@@ -628,24 +688,50 @@ def _provision_cluster(progress=gr.Progress()) -> bool:
 
 
 def generate_bt(
-    mission: str, use_grammar: bool, progress=gr.Progress()
+    mission: str,
+    use_grammar: bool,
+    model_choice: str,
+    cluster_choice: str,
+    progress=gr.Progress(),
 ) -> tuple[str, str, str, str]:
     """Generate BT XML via cluster. Returns (xml, validation_html, status, bt_viz_html)."""
     if not mission.strip():
         return "", "", "Veuillez entrer une mission.", ""
 
-    # Provision cluster
-    progress(0.05, desc="Connexion au cluster GPU...")
-    cluster_ok = _provision_cluster(progress)
+    # Determine target URL
+    if cluster_choice == "dataia25":
+        progress(0.05, desc="Connexion à DataIA25...")
+        tunnel_ok = _provision_dataia25_tunnel()
+        if not tunnel_ok:
+            return (
+                "",
+                "",
+                "DataIA25 inaccessible. Le serveur est peut-être éteint (auto-shutdown 15min).",
+                "",
+            )
+        target_url = DATAIA25_URL
+    else:
+        # Télécom Paris (with provisioning)
+        progress(0.05, desc="Connexion au cluster Télécom Paris...")
+        cluster_ok = _provision_cluster(progress)
+        if not cluster_ok:
+            return (
+                "",
+                "",
+                "Cluster Télécom Paris inaccessible. Vérifiez le VPN et le cluster.",
+                "",
+            )
+        target_url = TELECOM_URL
 
-    if not cluster_ok:
-        return "", "", "Cluster GPU inaccessible. Vérifiez le VPN et le cluster.", ""
+    payload = {"mission": mission, "use_grammar": use_grammar}
+    if model_choice and model_choice != "auto":
+        payload["model"] = model_choice
 
     progress(0.95, desc="Génération en cours sur le GPU...")
     try:
         r = httpx.post(
-            f"{CLUSTER_URL}/generate",
-            json={"mission": mission, "use_grammar": use_grammar},
+            f"{target_url}/generate",
+            json=payload,
             timeout=httpx.Timeout(timeout=MAX_TIME_S),
         )
         r.raise_for_status()
@@ -674,10 +760,16 @@ def generate_bt(
         }
     )
 
-    validation_html = _build_validation_html(valid, score, errors, warnings)
-    status = f"{'Valide' if valid else 'Invalide'} | Score: {score:.1f} | {gen_time}s | GPU cluster"
+    model_used = result.get("model", "unknown")
+    model_label = MODEL_LABELS.get(model_used, model_used)
+    cluster_label = CLUSTER_LABELS.get(cluster_choice, cluster_choice)
+    port_issues = validate_ports(xml) if xml else []
+    validation_html = _build_validation_html(
+        valid, score, errors, warnings, port_issues
+    )
+    status = f"{'Valide' if valid else 'Invalide'} | Score: {score:.1f} | {gen_time}s | {model_label} | {cluster_label}"
 
-    return xml, validation_html, status, render_bt_html(xml)
+    return xml, validation_html, status, render_bt_full_html(xml)
 
 
 # ─── Validation logic ──────────────────────────────────────────────────────
@@ -688,6 +780,7 @@ def validate_xml_input(xml_str: str) -> tuple[str, str, str]:
         return "", "Veuillez coller du XML à valider.", ""
 
     vr = validate_bt(xml_str)
+    port_issues = validate_ports(xml_str)
 
     now = datetime.now()
     append_history(
@@ -702,17 +795,23 @@ def validate_xml_input(xml_str: str) -> tuple[str, str, str]:
         }
     )
 
-    validation_html = _build_validation_html(vr.valid, vr.score, vr.errors, vr.warnings)
+    validation_html = _build_validation_html(
+        vr.valid, vr.score, vr.errors, vr.warnings, port_issues
+    )
     status = f"{'Valide' if vr.valid else 'Invalide'} | Score: {vr.score:.1f}"
 
-    return validation_html, status, render_bt_html(xml_str)
+    return validation_html, status, render_bt_full_html(xml_str)
 
 
 # ─── Validation display helper ─────────────────────────────────────────────
 
 
 def _build_validation_html(
-    valid: bool, score: float, errors: list, warnings: list
+    valid: bool,
+    score: float,
+    errors: list,
+    warnings: list,
+    port_issues: list | None = None,
 ) -> str:
     badge_color = "#22c55e" if valid else "#ef4444"
     badge_text = "VALIDE" if valid else "INVALIDE"
@@ -753,6 +852,29 @@ def _build_validation_html(
 
     if not errors and not warnings:
         html += '<div style="color: #22c55e; padding: 4px 0;">&#x2714; L1+L2+L3 — aucun problème</div>'
+
+    # L4 Port validation
+    if port_issues is not None:
+        if port_issues:
+            html += (
+                '<div style="margin-top: 12px; padding: 8px; background: #422006; '
+                'border: 1px solid #92400e; border-radius: 6px;">'
+                f'<div style="color: #fbbf24; font-weight: 600; margin-bottom: 4px;">'
+                f"⚠ L4 Ports — {len(port_issues)} issue(s)</div>"
+            )
+            for iss in port_issues[:10]:
+                iss_escaped = iss.replace("<", "&lt;").replace(">", "&gt;")
+                html += f'<div style="color: #fde68a; padding: 2px 0; font-size: 13px;">{iss_escaped}</div>'
+            if len(port_issues) > 10:
+                html += f'<div style="color: #9ca3af;">… +{len(port_issues) - 10} autres</div>'
+            html += "</div>"
+        else:
+            html += (
+                '<div style="margin-top: 12px; padding: 8px; background: #052e16; '
+                'border: 1px solid #166534; border-radius: 6px;">'
+                '<span style="color: #4ade80; font-weight: 600;">'
+                "✓ L4 Ports — OK</span></div>"
+            )
 
     html += "</div>"
     return html
@@ -797,23 +919,168 @@ def get_xml_for_row(evt: gr.SelectData) -> str:
 
 # ─── Cluster status ───────────────────────────────────────────────────────
 
+CLUSTER_LABELS = {
+    "telecom-paris": "Télécom Paris",
+    "dataia25": "DataIA25",
+}
 
-def get_cluster_status_html() -> str:
-    ok = _check_cluster()
-    if ok:
-        color, dot, label = "#22c55e", "🟢", "GPU Cluster Télécom Paris — accessible"
-    else:
-        color, dot, label = (
-            "#ef4444",
-            "🔴",
-            "GPU Cluster Télécom Paris — hors ligne (provisioning à la demande)",
+
+def _get_cluster_info_from(url: str) -> dict | None:
+    """Fetch /health from a cluster URL, return dict or None."""
+    try:
+        r = httpx.get(f"{url}/health", timeout=3)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return None
+
+
+def _get_cluster_info() -> dict | None:
+    """Fetch /health from active cluster."""
+    return _get_cluster_info_from(CLUSTER_URL)
+
+
+def _get_all_clusters_info() -> list[tuple[str, str, dict | None]]:
+    """Return [(label, url, health_dict_or_None), ...] for all clusters."""
+    results = []
+    for label, url in [("telecom-paris", TELECOM_URL), ("dataia25", DATAIA25_URL)]:
+        info = _get_cluster_info_from(url)
+        results.append((label, url, info))
+    return results
+
+
+# ─── Cached cluster status (background thread) ────────────────────────────
+
+_cached_banner_html: str = ""
+_banner_lock = threading.Lock()
+
+
+def _banner_updater():
+    """Background thread: refresh cluster status HTML every 5s."""
+    global _cached_banner_html
+    while True:
+        try:
+            html = _build_cluster_banner_html()
+        except Exception:
+            html = ""
+        with _banner_lock:
+            _cached_banner_html = html
+        time.sleep(5)
+
+
+def get_cached_banner_html() -> str:
+    with _banner_lock:
+        return _cached_banner_html
+
+
+_banner_thread = threading.Thread(target=_banner_updater, daemon=True)
+_banner_thread.start()
+
+
+def _get_available_models() -> list[str]:
+    """Fetch available model keys from active cluster."""
+    try:
+        r = httpx.get(f"{CLUSTER_URL}/models", timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            return list(data.get("available", {}).keys())
+    except Exception:
+        pass
+    return list(MODEL_LABELS.keys())
+
+
+def _provision_dataia25_tunnel() -> bool:
+    """Ensure SSH tunnel to dataia25 is up (localhost:8081 -> dataia25:8080)."""
+    # Check if tunnel already works
+    info = _get_cluster_info_from(DATAIA25_URL)
+    if info:
+        return True
+
+    # Kill stale tunnel
+    _run(f"pkill -f 'ssh.*-L 8081:localhost:{DATAIA25_PORT}' 2>/dev/null")
+    time.sleep(0.5)
+
+    # Open tunnel via RPi5 VPN to dataia25
+    rc, _ = _run(
+        f"ssh -fN -L 8081:localhost:{DATAIA25_PORT} dataia25 "
+        f"-o ConnectTimeout=5 -o ServerAliveInterval=30 "
+        f"-o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes",
+        timeout=10,
+    )
+    if rc != 0:
+        # Fallback: try via proxy jump through localhost (RPi5 is localhost)
+        _run(
+            f"nohup ssh -N -L 8081:{DATAIA25_HOST}:{DATAIA25_PORT} localhost "
+            f"-o ServerAliveInterval=30 -o ServerAliveCountMax=3 "
+            f"-o ExitOnForwardFailure=yes </dev/null >/dev/null 2>&1 &",
+            timeout=5,
         )
+        time.sleep(2)
+
+    # Verify
+    for _ in range(3):
+        info = _get_cluster_info_from(DATAIA25_URL)
+        if info:
+            return True
+        time.sleep(1)
+    return False
+
+
+def _build_cluster_banner_html() -> str:
+    """Build HTML banner (called by background thread only)."""
+    clusters = _get_all_clusters_info()
+
+    items_html = ""
+    for key, url, info in clusters:
+        label = CLUSTER_LABELS.get(key, key)
+        if info:
+            model_key = info.get("model", "unknown")
+            model_label = MODEL_LABELS.get(model_key, model_key)
+            gpu_name = info.get("gpu_name", "GPU")
+            backend = info.get("backend", "")
+            backend_tag = f" ({backend})" if backend else ""
+            dot = "🟢"
+            color = "#22c55e"
+
+            detail = f"{gpu_name}{backend_tag} — {model_label}"
+            remaining = info.get("remaining_s")
+            if remaining is not None:
+                mins = remaining // 60
+                secs = remaining % 60
+                detail += f" — ⏱ {mins}m{secs:02d}s"
+
+            items_html += (
+                f'<div style="display:inline-flex;align-items:center;gap:8px;padding:4px 12px;'
+                f'background:#052e16;border:1px solid #166534;border-radius:8px;">'
+                f'<span style="font-size:14px;">{dot}</span>'
+                f'<span style="color:{color};font-weight:600;font-size:13px;">{label}</span>'
+                f'<span style="color:#9ca3af;font-size:12px;">{detail}</span>'
+                f"</div> "
+            )
+        else:
+            dot = "🔴"
+            color = "#6b7280"
+            items_html += (
+                f'<div style="display:inline-flex;align-items:center;gap:8px;padding:4px 12px;'
+                f'background:#1f2937;border:1px solid #374151;border-radius:8px;">'
+                f'<span style="font-size:14px;">{dot}</span>'
+                f'<span style="color:{color};font-weight:600;font-size:13px;">{label}</span>'
+                f'<span style="color:#6b7280;font-size:12px;">hors ligne</span>'
+                f"</div> "
+            )
+
     return (
-        f'<div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;">'
-        f'<span style="font-size:16px;">{dot}</span>'
-        f'<span style="color:{color};font-weight:600;">{label}</span>'
+        f'<div id="cluster-banner" style="display:flex;gap:10px;flex-wrap:wrap;'
+        f'min-height:36px;align-items:center;">'
+        f"{items_html}"
         f"</div>"
     )
+
+
+def get_cluster_status_html() -> str:
+    """Return cached banner HTML (instant, never blocks)."""
+    return get_cached_banner_html()
 
 
 # ─── Build Gradio UI ───────────────────────────────────────────────────────
@@ -831,21 +1098,35 @@ CSS = """
     }
     .copy-btn:hover { background: #4b5563; }
     #history-df .wrap { max-height: 280px; overflow-y: auto; }
+    /* Fix: prevent banner refresh from shifting layout */
+    #cluster-status-box { min-height: 44px; }
+    #cluster-status-box .prose { min-height: 36px; }
 """
+
+
+def _on_model_change(model_choice):
+    """Auto-switch cluster based on model selection. No reverse callback → no loop."""
+    if model_choice in DATAIA25_MODELS:
+        return gr.update(value="dataia25")
+    if model_choice in TELECOM_MODELS:
+        return gr.update(value="telecom-paris")
+    return gr.update()  # "auto" → keep current cluster
 
 
 def build_app() -> gr.Blocks:
     with gr.Blocks(title="NAV4RAIL BT Generator", theme=THEME, css=CSS) as app:
         gr.Markdown("# NAV4RAIL — Behavior Tree Generator", elem_classes="main-title")
         gr.Markdown(
-            "Génération via le cluster GPU Télécom Paris | Validation locale",
+            "Génération via cluster GPU Télécom Paris ou DataIA25 | Validation locale",
             elem_classes="subtitle",
         )
 
-        with gr.Row():
-            cluster_status = gr.HTML(value=get_cluster_status_html)
-            refresh_status_btn = gr.Button("↻", size="sm", scale=0)
-        refresh_status_btn.click(fn=get_cluster_status_html, outputs=[cluster_status])
+        cluster_status = gr.HTML(
+            value=get_cluster_status_html(),
+            elem_id="cluster-status-box",
+        )
+        # every=3 is smooth because get_cluster_status_html() returns cached HTML instantly
+        app.load(fn=get_cluster_status_html, outputs=[cluster_status], every=3)
 
         with gr.Tabs():
             # ─── Tab 1: Génération ──────────────────────────────────────
@@ -854,13 +1135,34 @@ def build_app() -> gr.Blocks:
                     with gr.Column(scale=1):
                         mission_input = gr.Textbox(
                             label="Mission (langage naturel)",
-                            placeholder="Ex: Navigue jusqu'au km 42 depuis le km 10",
+                            placeholder="Ex: Inspection des rails entre le km 12 et le km 45",
                             lines=3,
                         )
-                        use_grammar = gr.Checkbox(
-                            label="Grammaire GBNF (décodage contraint)",
-                            value=True,
-                        )
+                        with gr.Row():
+                            model_selector = gr.Dropdown(
+                                choices=[("Auto (modèle courant)", "auto")]
+                                + [(label, key) for key, label in MODEL_LABELS.items()],
+                                value="auto",
+                                label="Modèle",
+                                scale=2,
+                            )
+                            cluster_selector = gr.Dropdown(
+                                choices=[
+                                    ("Télécom Paris (GGUF, SLURM)", "telecom-paris"),
+                                    (
+                                        "DataIA25 (Mistral fp16, auto-shutdown 15min)",
+                                        "dataia25",
+                                    ),
+                                ],
+                                value="telecom-paris",
+                                label="Cluster",
+                                scale=2,
+                            )
+                            use_grammar = gr.Checkbox(
+                                label="Grammaire GBNF",
+                                value=True,
+                                scale=1,
+                            )
                         generate_btn = gr.Button(
                             "Générer le Behavior Tree",
                             variant="primary",
@@ -887,7 +1189,12 @@ def build_app() -> gr.Blocks:
 
                 generate_btn.click(
                     fn=generate_bt,
-                    inputs=[mission_input, use_grammar],
+                    inputs=[
+                        mission_input,
+                        use_grammar,
+                        model_selector,
+                        cluster_selector,
+                    ],
                     outputs=[xml_output, gen_validation, gen_status, gen_bt_viz],
                 )
 
@@ -895,6 +1202,13 @@ def build_app() -> gr.Blocks:
                     fn=lambda x: x[0],
                     inputs=[examples],
                     outputs=[mission_input],
+                )
+
+                # Model selection auto-switches cluster (one-way, no loop)
+                model_selector.change(
+                    fn=_on_model_change,
+                    inputs=[model_selector],
+                    outputs=[cluster_selector],
                 )
 
             # ─── Tab 2: Validation ──────────────────────────────────────
@@ -958,9 +1272,7 @@ def build_app() -> gr.Blocks:
                 # --- Filters ---
                 with gr.Row():
                     ds_cat_filter = gr.Dropdown(
-                        choices=["Toutes"] + [
-                            f"{c}" for c in _CAT_ORDER
-                        ],
+                        choices=["Toutes"] + [f"{c}" for c in _CAT_ORDER],
                         value="Toutes",
                         label="Catégorie",
                         scale=2,
@@ -985,9 +1297,7 @@ def build_app() -> gr.Blocks:
                     ds_filter_btn = gr.Button("Filtrer", variant="primary", scale=0)
 
                 # --- State ---
-                ds_filtered_state = gr.State(
-                    [(i, s) for i, s in enumerate(DATASET)]
-                )
+                ds_filtered_state = gr.State([(i, s) for i, s in enumerate(DATASET)])
                 ds_idx_state = gr.State(0)
 
                 # --- Navigator ---
@@ -1032,11 +1342,23 @@ def build_app() -> gr.Blocks:
                 )
 
                 # --- Wire filter callback ---
-                _ds_filter_inputs = [ds_cat_filter, ds_score_filter, ds_search, ds_port_filter]
+                _ds_filter_inputs = [
+                    ds_cat_filter,
+                    ds_score_filter,
+                    ds_search,
+                    ds_port_filter,
+                ]
                 _ds_filter_outputs = [
-                    ds_filtered_state, ds_idx_state, ds_slider,
-                    ds_status, ds_mission_html, ds_score_html,
-                    ds_port_html, ds_xml, ds_prompt, ds_bt_viz,
+                    ds_filtered_state,
+                    ds_idx_state,
+                    ds_slider,
+                    ds_status,
+                    ds_mission_html,
+                    ds_score_html,
+                    ds_port_html,
+                    ds_xml,
+                    ds_prompt,
+                    ds_bt_viz,
                 ]
                 ds_filter_btn.click(
                     fn=ds_apply_filters,
@@ -1056,8 +1378,13 @@ def build_app() -> gr.Blocks:
                     inputs=[ds_filtered_state, ds_slider],
                     outputs=[
                         ds_idx_state,
-                        ds_status, ds_mission_html, ds_score_html,
-                        ds_port_html, ds_xml, ds_prompt, ds_bt_viz,
+                        ds_status,
+                        ds_mission_html,
+                        ds_score_html,
+                        ds_port_html,
+                        ds_xml,
+                        ds_prompt,
+                        ds_bt_viz,
                     ],
                 )
 
@@ -1066,18 +1393,30 @@ def build_app() -> gr.Blocks:
                     fn=ds_prev,
                     inputs=[ds_filtered_state, ds_idx_state],
                     outputs=[
-                        ds_idx_state, ds_slider,
-                        ds_status, ds_mission_html, ds_score_html,
-                        ds_port_html, ds_xml, ds_prompt, ds_bt_viz,
+                        ds_idx_state,
+                        ds_slider,
+                        ds_status,
+                        ds_mission_html,
+                        ds_score_html,
+                        ds_port_html,
+                        ds_xml,
+                        ds_prompt,
+                        ds_bt_viz,
                     ],
                 )
                 ds_next_btn.click(
                     fn=ds_next,
                     inputs=[ds_filtered_state, ds_idx_state],
                     outputs=[
-                        ds_idx_state, ds_slider,
-                        ds_status, ds_mission_html, ds_score_html,
-                        ds_port_html, ds_xml, ds_prompt, ds_bt_viz,
+                        ds_idx_state,
+                        ds_slider,
+                        ds_status,
+                        ds_mission_html,
+                        ds_score_html,
+                        ds_port_html,
+                        ds_xml,
+                        ds_prompt,
+                        ds_bt_viz,
                     ],
                 )
 

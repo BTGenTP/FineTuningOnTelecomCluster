@@ -1,24 +1,15 @@
 """
 Merge LoRA adapter into base model and save for GGUF conversion.
 
-Run this on the cluster (needs GPU + ~16 GB RAM):
-    python merge_and_convert.py \
-        --adapter-path ../finetune/outputs/nav4rail_mistral_lora/lora_adapter \
-        --output-dir ./merged_model
+Auto-detects the base model from adapter_config.json if --base-model is not
+specified explicitly.
 
-Then convert to GGUF with llama.cpp:
-    git clone https://github.com/ggml-org/llama.cpp
-    cd llama.cpp && pip install -r requirements.txt
-    python convert_hf_to_gguf.py ../merged_model \
-        --outtype q4_k_m \
-        --outfile ../nav4rail-mistral-7b-q4_k_m.gguf
-
-Transfer locally:
-    scp gpu:~/code/nav4rail_finetune/nav4rail-mistral-7b-q4_k_m.gguf \
-        ~/Telecom_Projet_fil_rouge/webapp/models/
+Usage:
+    python merge_and_convert.py --adapter-path ./lora_adapter --output-dir ./merged
 """
 
 import argparse
+import json
 from pathlib import Path
 
 import torch
@@ -26,24 +17,49 @@ from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
+def detect_base_model(adapter_path: str) -> str:
+    """Read base_model_name_or_path from adapter_config.json."""
+    cfg_path = Path(adapter_path) / "adapter_config.json"
+    if not cfg_path.exists():
+        raise FileNotFoundError(
+            f"No adapter_config.json in {adapter_path}. "
+            "Specify --base-model explicitly."
+        )
+    cfg = json.loads(cfg_path.read_text())
+    base = cfg.get("base_model_name_or_path")
+    if not base:
+        raise ValueError(
+            "adapter_config.json has no base_model_name_or_path. "
+            "Specify --base-model explicitly."
+        )
+    return base
+
+
 def main():
     parser = argparse.ArgumentParser(description="Merge LoRA adapter into base model")
-    parser.add_argument("--base-model", default="mistralai/Mistral-7B-Instruct-v0.2",
-                        help="HuggingFace model ID")
-    parser.add_argument("--adapter-path", required=True,
-                        help="Path to LoRA adapter directory")
-    parser.add_argument("--output-dir", default="./merged_model",
-                        help="Output directory for merged model")
+    parser.add_argument(
+        "--base-model",
+        default=None,
+        help="HuggingFace model ID (auto-detected from adapter_config.json if omitted)",
+    )
+    parser.add_argument(
+        "--adapter-path", required=True, help="Path to LoRA adapter directory"
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="./merged_model",
+        help="Output directory for merged model",
+    )
     args = parser.parse_args()
 
+    base_model_id = args.base_model or detect_base_model(args.adapter_path)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Loading base model: {args.base_model}")
+    print(f"Loading base model: {base_model_id}")
     base_model = AutoModelForCausalLM.from_pretrained(
-        args.base_model,
+        base_model_id,
         torch_dtype=torch.float16,
-        device_map="auto",
     )
 
     print(f"Loading LoRA adapter: {args.adapter_path}")
@@ -58,7 +74,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.adapter_path)
     tokenizer.save_pretrained(str(output_dir))
 
-    print("Done. Next step: convert to GGUF with llama.cpp convert_hf_to_gguf.py")
+    print(f"Done. Base model was: {base_model_id}")
 
 
 if __name__ == "__main__":

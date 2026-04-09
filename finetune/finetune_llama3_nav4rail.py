@@ -22,9 +22,19 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
+    TrainerCallback,
     TrainingArguments,
 )
 from trl import DataCollatorForCompletionOnlyLM, SFTTrainer
+
+
+class PrintLossCallback(TrainerCallback):
+    """Print loss to stdout (flushed) so SLURM captures it."""
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs:
+            print(logs, flush=True)
+
 
 # ─── NAV4RAIL system prompt (constant, embedded) ────────────────────────────
 
@@ -111,9 +121,18 @@ SIMULATION :
 MODEL_CONFIGS = {
     "llama3_8b": {
         "hf_id": "NousResearch/Meta-Llama-3.1-8B-Instruct",
-        "lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        "lora_targets": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ],
         "response_anchor": "assistant<|end_header_id|>",
         "chat_template": True,  # use tokenizer.apply_chat_template
+        "supports_system": True,
         "bf16": True,
         "default_epochs": 10,
         "default_batch": 1,
@@ -121,13 +140,79 @@ MODEL_CONFIGS = {
     },
     "mistral_7b": {
         "hf_id": "mistralai/Mistral-7B-Instruct-v0.2",
-        "lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        "lora_targets": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ],
         "response_anchor": "[/INST]",
         "chat_template": False,  # manual [INST]...[/INST] formatting
         "bf16": False,  # Mistral 7B v0.2 uses fp16
         "default_epochs": 10,
         "default_batch": 2,
         "default_grad_accum": 8,
+    },
+    "qwen25_coder_7b": {
+        "hf_id": "Qwen/Qwen2.5-Coder-7B-Instruct",
+        "lora_targets": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ],
+        "response_anchor": "assistant",
+        "chat_template": True,
+        "supports_system": True,
+        "bf16": True,
+        "default_epochs": 10,
+        "default_batch": 1,
+        "default_grad_accum": 16,
+    },
+    "qwen25_14b": {
+        "hf_id": "Qwen/Qwen2.5-14B-Instruct",
+        "lora_targets": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ],
+        "response_anchor": "assistant",
+        "chat_template": True,
+        "supports_system": True,
+        "bf16": True,
+        "default_epochs": 10,
+        "default_batch": 1,
+        "default_grad_accum": 16,
+    },
+    "gemma2_9b": {
+        "hf_id": "google/gemma-2-9b-it",
+        "lora_targets": [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ],
+        "response_anchor": "model",
+        "chat_template": True,
+        "supports_system": False,  # Gemma 2 has no system role
+        "attn_implementation": "sdpa",  # eager OOMs on 24GB
+        "bf16": True,
+        "default_epochs": 10,
+        "default_batch": 1,
+        "default_grad_accum": 16,
     },
 }
 
@@ -139,7 +224,104 @@ LR = 2e-4
 
 def _format_mistral(mission: str, xml: str) -> str:
     """Format as Mistral [INST]...[/INST] prompt."""
-    return f"<s>[INST] {SYSTEM_PROMPT}\n\nMission : {mission} [/INST]\n{xml} </s>"
+    # No leading <s> — tokenizer adds BOS via add_special_tokens=True
+    return f"[INST] {SYSTEM_PROMPT}\n\nMission : {mission} [/INST]\n{xml}</s>"
+
+
+def _compute_response_template_ids(tokenizer, model_cfg):
+    """Compute response template token IDs dynamically.
+
+    Passing a string like "assistant<|end_header_id|>" to
+    DataCollatorForCompletionOnlyLM fails because tokenizer.encode()
+    treats special-token syntax as literal characters, producing
+    wrong IDs that never match the actual tokenized text → loss=0.
+
+    Instead, we derive the correct IDs from the tokenizer itself
+    by formatting a complete conversation and locating the boundary
+    between prompt and response.
+    """
+    if model_cfg["chat_template"]:
+        # Format a full 3-message conversation, find where RESP starts
+        msgs_full = [
+            {"role": "system", "content": "test"},
+            {"role": "user", "content": "test"},
+            {"role": "assistant", "content": "RESP"},
+        ]
+        # Tokenize the SAME WAY as SFTTrainer: add_special_tokens=True (default)
+        # Use add_generation_prompt=False to avoid a duplicate assistant header at the end
+        text = tokenizer.apply_chat_template(
+            msgs_full, tokenize=False, add_generation_prompt=False
+        )
+        full_ids = tokenizer(text)["input_ids"]
+        resp_ids = tokenizer.encode("RESP", add_special_tokens=False)
+
+        # Find RESP token(s) in full_ids (search from end)
+        resp_pos = -1
+        for i in range(len(full_ids) - len(resp_ids), -1, -1):
+            if full_ids[i : i + len(resp_ids)] == resp_ids:
+                resp_pos = i
+                break
+
+        if resp_pos < 0:
+            raise RuntimeError(
+                f"Could not find RESP in re-tokenized chat template. "
+                f"text[:200]={text[:200]!r}, full_ids[:30]={full_ids[:30]}"
+            )
+
+        # Find the eot_id before RESP — marks the actual boundary.
+        # The template should be: <|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n
+        # We search backwards from RESP for the eot_id token to avoid
+        # including content-dependent tokens (e.g., "test").
+        eot_id = None
+        for tid in tokenizer.all_special_ids:
+            if "eot" in tokenizer.decode([tid]).lower() or tid == getattr(
+                tokenizer, "eot_token_id", None
+            ):
+                eot_id = tid
+                break
+        if eot_id is None:
+            # Fallback: look for eot_id in the tokens before RESP
+            for k in range(resp_pos - 1, max(resp_pos - 10, -1), -1):
+                decoded = tokenizer.decode([full_ids[k]])
+                if "eot" in decoded.lower():
+                    eot_id = full_ids[k]
+                    break
+
+        if eot_id is not None:
+            # Find the last eot_id before RESP
+            eot_pos = -1
+            for k in range(resp_pos - 1, -1, -1):
+                if full_ids[k] == eot_id:
+                    eot_pos = k
+                    break
+            if eot_pos >= 0:
+                template_ids = full_ids[eot_pos:resp_pos]
+            else:
+                template_ids = full_ids[resp_pos - 5 : resp_pos]
+        else:
+            template_ids = full_ids[resp_pos - 5 : resp_pos]
+    else:
+        # Mistral: tokenize a minimal sample, find [/INST]\n boundary
+        prompt = "[INST] test [/INST]\n"
+        full_text = prompt + "response"
+        full_ids = tokenizer.encode(full_text, add_special_tokens=False)
+        resp_ids = tokenizer.encode("response", add_special_tokens=False)
+        pos = -1
+        for i in range(len(full_ids) - len(resp_ids), -1, -1):
+            if full_ids[i : i + len(resp_ids)] == resp_ids:
+                pos = i
+                break
+        if pos > 0:
+            n = min(3, pos)
+            template_ids = full_ids[pos - n : pos]
+        else:
+            template_ids = tokenizer.encode(
+                model_cfg["response_anchor"], add_special_tokens=False
+            )
+
+    print(f"  Response template IDs ({len(template_ids)} tokens): {template_ids}")
+    print(f"  Decoded: {tokenizer.decode(template_ids)!r}")
+    return template_ids
 
 
 def load_dataset(path: Path, tokenizer, model_cfg: dict) -> Dataset:
@@ -158,12 +340,25 @@ def load_dataset(path: Path, tokenizer, model_cfg: dict) -> Dataset:
                 continue
 
             if use_chat_template:
-                messages = [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": f"Mission : {mission}"},
-                    {"role": "assistant", "content": xml},
-                ]
-                text = tokenizer.apply_chat_template(messages, tokenize=False)
+                if model_cfg.get("supports_system", True):
+                    messages = [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": f"Mission : {mission}"},
+                        {"role": "assistant", "content": xml},
+                    ]
+                else:
+                    # Models without system role (e.g. Gemma 2):
+                    # merge system prompt into user message
+                    messages = [
+                        {
+                            "role": "user",
+                            "content": f"{SYSTEM_PROMPT}\n\nMission : {mission}",
+                        },
+                        {"role": "assistant", "content": xml},
+                    ]
+                text = tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=False
+                )
             else:
                 text = _format_mistral(mission, xml)
             rows.append({"text": text})
@@ -205,12 +400,13 @@ def load_model_and_tokenizer(model_cfg: dict):
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
 
+    attn_impl = model_cfg.get("attn_implementation", "eager")
     model = AutoModelForCausalLM.from_pretrained(
         hf_id,
         quantization_config=bnb_config,
         device_map="auto",
         torch_dtype=compute_dtype,
-        attn_implementation="eager",
+        attn_implementation=attn_impl,
     )
     model = prepare_model_for_kbit_training(model)
     model.gradient_checkpointing_enable()
@@ -237,9 +433,7 @@ def load_model_and_tokenizer(model_cfg: dict):
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="QLoRA fine-tune on NAV4RAIL BT dataset"
-    )
+    p = argparse.ArgumentParser(description="QLoRA fine-tune on NAV4RAIL BT dataset")
     p.add_argument("--model", choices=sorted(MODEL_CONFIGS.keys()), required=True)
     p.add_argument("--dataset", type=str, required=True, help="Path to JSONL dataset")
     p.add_argument(
@@ -251,6 +445,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--grad-accum", type=int, default=None)
     p.add_argument("--max-seq-len", type=int, default=MAX_SEQ_LEN)
     p.add_argument("--lora-r", type=int, default=LORA_R)
+    p.add_argument(
+        "--resume-from-checkpoint",
+        type=str,
+        default=None,
+        help="Path to checkpoint directory to resume training from",
+    )
     return p.parse_args(argv)
 
 
@@ -277,11 +477,41 @@ def main(argv=None):
     model, tokenizer = load_model_and_tokenizer(model_cfg)
     split = load_dataset(dataset_path, tokenizer, model_cfg)
 
-    # Completion-only collator: mask loss on everything before the response
-    collator = DataCollatorForCompletionOnlyLM(
-        response_template=model_cfg["response_anchor"],
-        tokenizer=tokenizer,
-    )
+    # Completion-only collator: mask loss on everything before the response.
+    # Only used for Mistral (proven to work). For Llama 3, SFTTrainer's internal
+    # tokenization does not match DataCollatorForCompletionOnlyLM's search,
+    # so we train on the full sequence (~30% prompt, ~70% XML response).
+    collator = None
+    if not model_cfg["chat_template"]:
+        # Mistral: completion-only works correctly
+        response_template_ids = _compute_response_template_ids(tokenizer, model_cfg)
+        collator = DataCollatorForCompletionOnlyLM(
+            response_template=response_template_ids,
+            tokenizer=tokenizer,
+        )
+
+        # Verify anchor in an actual training sample
+        sample_text = split["train"][0]["text"]
+        sample_ids = tokenizer(sample_text)["input_ids"]
+        found_at = -1
+        for i in range(len(sample_ids) - len(response_template_ids) + 1):
+            if sample_ids[i : i + len(response_template_ids)] == response_template_ids:
+                found_at = i
+                break
+        if found_at < 0:
+            decoded_start = tokenizer.decode(sample_ids[:50])
+            raise RuntimeError(
+                f"Response template {response_template_ids} NOT FOUND in tokenized "
+                f"sample ({len(sample_ids)} tokens). Training would produce loss=0.\n"
+                f"First 50 IDs: {sample_ids[:50]}\n"
+                f"Decoded start: {decoded_start[:300]!r}"
+            )
+        n_response = len(sample_ids) - found_at - len(response_template_ids)
+        print(
+            f"  Anchor verified at position {found_at}, ~{n_response} response tokens"
+        )
+    else:
+        print("  Full-sequence training (no completion-only masking for Llama 3)")
 
     training_args = TrainingArguments(
         output_dir=str(out_dir),
@@ -292,7 +522,9 @@ def main(argv=None):
         learning_rate=args.lr,
         fp16=not use_bf16,
         bf16=use_bf16,
+        logging_strategy="steps",
         logging_steps=10,
+        log_level="info",
         eval_strategy="epoch",
         save_strategy="epoch",
         save_total_limit=3,
@@ -307,17 +539,21 @@ def main(argv=None):
         gradient_checkpointing_kwargs={"use_reentrant": False},
     )
 
-    trainer = SFTTrainer(
+    trainer_kwargs = dict(
         model=model,
         tokenizer=tokenizer,
         args=training_args,
         train_dataset=split["train"],
         eval_dataset=split["test"],
         dataset_text_field="text",
-        data_collator=collator,
         max_seq_length=args.max_seq_len,
         packing=False,
+        callbacks=[PrintLossCallback()],
     )
+    if collator is not None:
+        trainer_kwargs["data_collator"] = collator
+
+    trainer = SFTTrainer(**trainer_kwargs)
 
     print(f"\n{'=' * 60}")
     print(f"Model: {model_cfg['hf_id']}")
@@ -327,9 +563,11 @@ def main(argv=None):
     print(f"  LR: {args.lr}, max_seq_len: {args.max_seq_len}")
     print(f"  LoRA: r={args.lora_r}, alpha={LORA_ALPHA}")
     print(f"  Output: {out_dir}")
+    if args.resume_from_checkpoint:
+        print(f"  Resuming from: {args.resume_from_checkpoint}")
     print(f"{'=' * 60}\n")
 
-    trainer.train()
+    trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
     # Save adapter
     adapter_dir = out_dir / "lora_adapter"

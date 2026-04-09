@@ -40,18 +40,21 @@ export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$HOME/.cache/pip}"
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 mkdir -p "$HF_HUB_CACHE" "$PIP_CACHE_DIR"
 
-# ─── Dependencies ───────────────────────────────────────────────────────────
+# ─── Dependencies (flock for concurrent safety) ────────────────────────────
 echo "[job] Installing dependencies..."
-pip install --upgrade pip
-pip install \
-  "torch==2.3.0" \
-  "transformers==4.44.0" \
-  "peft==0.12.0" \
-  "trl==0.10.1" \
-  "bitsandbytes==0.43.3" \
-  "datasets==2.21.0" \
-  "accelerate==0.34.0" \
-  "scipy" "sentencepiece" "protobuf" "rich"
+(
+  flock -w 600 200 || { echo "[job] Could not acquire pip lock"; exit 1; }
+  pip install --upgrade pip
+  pip install \
+    "torch==2.3.0" \
+    "transformers==4.44.0" \
+    "peft==0.12.0" \
+    "trl==0.10.1" \
+    "bitsandbytes==0.43.3" \
+    "datasets==2.21.0" \
+    "accelerate==0.34.0" \
+    "scipy" "sentencepiece" "protobuf" "rich"
+) 200>"$VENV_DIR/.pip_lock"
 
 # ─── Verify dataset ─────────────────────────────────────────────────────────
 if [ ! -f "$DATASET" ]; then

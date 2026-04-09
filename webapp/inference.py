@@ -67,14 +67,23 @@ SIMULATION :
 - SimulationStarted              : Vérifie si le mode simulation est actif"""
 
 TEST_MISSIONS = [
-    "Navigue jusqu'au km 42 depuis le km 10",
-    "Inspecte la voie entre le km 5 et le km 15 avec analyse qualité",
-    "Effectue des mesures de géométrie de voie au point PK30",
-    "Navigue vers le dépôt principal avec autorisation préalable",
-    "Inspecte les rails entre km 20 et km 35 et corrige les défauts détectés",
-    "Simule une inspection reach-stop de la section critique avec analyse corrective",
-    "Déplace-toi en mode haute sécurité avec arrêt et signal à chaque segment",
-    "Effectue une patrouille d'inspection entre km 0 et km 25 avec validation stricte",
+    # transport_simple
+    "Navigation simple vers un point kilométrique (km 21)",
+    # inspect-ctrl (diverse inspection types)
+    "Inspection des rails entre le km 12 et le km 45",
+    "Inspection des ballast entre le km 7 et le km 46",
+    "Inspection avec mesures renforcées des attaches de rail au km 30",
+    "Mission complète : préparation, navigation autorisée et inspection des soudures entre km 5 et km 25",
+    # transport_arrêts_multiples
+    "Déplacement avec arrêts multiples aux km 3, 35 et 42",
+    # correction_anomalie
+    "Correction de trajectoire après détection d'anomalie au km 26",
+    # simulation
+    "Mission simulation : test de déplacement entre km 19 et km 40",
+    # inspect+ctrl
+    "Navigation autorisée avec autorisation du poste de contrôle vers le km 15",
+    # transport with measurements
+    "Parcours d'acquisition des caténaires entre km 21 et km 36. Les mesures seront prises à la volée sans être contrôlées",
 ]
 
 
@@ -95,7 +104,9 @@ def _extract_xml(text: str) -> str:
 class Nav4RailGenerator:
     """GGUF-based BT generator with optional GBNF constrained decoding."""
 
-    def __init__(self, model_path: str, n_ctx: int = 2048, n_threads: int | None = None):
+    def __init__(
+        self, model_path: str, n_ctx: int = 2048, n_threads: int | None = None
+    ):
         from llama_cpp import Llama, LlamaGrammar
 
         self._lock = threading.Lock()
@@ -115,8 +126,9 @@ class Nav4RailGenerator:
         self._grammar = LlamaGrammar.from_string(NAV4RAIL_GBNF)
         print(f"[inference] Model loaded in {time.time() - t0:.1f}s")
 
-    def generate(self, mission: str, use_grammar: bool = True,
-                 max_tokens: int = 800) -> dict:
+    def generate(
+        self, mission: str, use_grammar: bool = True, max_tokens: int = 800
+    ) -> dict:
         prompt = _build_prompt(mission)
 
         with self._lock:
