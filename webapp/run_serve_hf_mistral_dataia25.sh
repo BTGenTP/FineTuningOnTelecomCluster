@@ -55,7 +55,7 @@ echo "[serve-hf] Starting server with merged model at $MERGED_DIR"
 echo "[serve-hf] Auto-shutdown after 15 minutes of inactivity"
 
 # ─── Inline server ──────────────────────────────────────────────────────────
-FINETUNE_DIR="$HOME/nav4rail" MERGED_DIR="$MERGED_DIR" IDLE_TIMEOUT="900" \
+FINETUNE_DIR="$HOME/nav4rail" MERGED_DIR="$MERGED_DIR" IDLE_TIMEOUT="300" \
   python3 -c "
 import os, re, sys, time, threading, signal, torch
 from transformers import AutoModelForCausalLM, AutoTokenizer

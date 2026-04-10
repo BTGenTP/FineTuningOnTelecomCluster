@@ -10,6 +10,7 @@ Usage:
 
 import asyncio
 import json
+import logging
 import re
 import subprocess
 import sys
@@ -22,6 +23,11 @@ from statistics import mean, median
 
 import gradio as gr
 import httpx
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
+log = logging.getLogger("nav4rail")
 
 # ─── Import validation + test missions from existing webapp ─────────────────
 
@@ -44,24 +50,53 @@ GPU_HOST = "gpu"
 DATAIA25_HOST = "192.168.80.211"
 DATAIA25_PORT = 8080
 REMOTE_USER = "blepourt-25"
-REMOTE_MODEL_DIR = f"/home/infres/{REMOTE_USER}/models"
 CLUSTER_PORT = 8080
 
 # Active cluster URL — updated dynamically
 CLUSTER_URL = TELECOM_URL
 
 MODEL_LABELS = {
-    "mistral-7b": "Mistral 7B v0.2",
-    "mistral-7b-merged-fp16": "Mistral 7B v0.2 (fp16 merged)",
-    "llama3-8b": "Llama 3.1 8B",
-    "qwen-coder-7b": "Qwen 2.5 Coder 7B",
-    "qwen-14b": "Qwen 2.5 14B",
-    "gemma2-9b": "Gemma 2 9B",
+    "mistral-7b-merged-fp16": "Mistral 7B",
+    "llama3-8b-merged-fp16": "Llama 3.1 8B",
+    "qwen-coder-7b-merged-fp16": "Qwen 2.5 Coder 7B",
+    "gemma2-9b-merged-fp16": "Gemma 2 9B",
+    "qwen-14b-merged-fp16": "Qwen 2.5 14B",
 }
 
-# Models available per cluster
-TELECOM_MODELS = {k for k in MODEL_LABELS if k != "mistral-7b-merged-fp16"}
-DATAIA25_MODELS = {"mistral-7b-merged-fp16"}
+# Map model API key → SLURM model_key for job_serve_fp16.sh
+MODEL_SLURM_KEY = {
+    "mistral-7b-merged-fp16": "mistral_7b",
+    "llama3-8b-merged-fp16": "llama3_8b",
+    "qwen-coder-7b-merged-fp16": "qwen25_coder_7b",
+    "gemma2-9b-merged-fp16": "gemma2_9b",
+    "qwen-14b-merged-fp16": "qwen25_14b",
+}
+
+# dataia25 script key
+MODEL_DATAIA25_KEY = {
+    "mistral-7b-merged-fp16": "mistral_7b",
+    "llama3-8b-merged-fp16": "llama3_8b",
+    "qwen-coder-7b-merged-fp16": "qwen25_coder_7b",
+    "gemma2-9b-merged-fp16": "gemma2_9b",
+    "qwen-14b-merged-fp16": "qwen25_14b",
+}
+
+# GPU VRAM requirements (fp16): model → fits P100(16GB)?, fits 3090(24GB)?
+MODEL_GPU_FIT = {
+    "mistral-7b-merged-fp16": {"P100": True, "3090": True},
+    "llama3-8b-merged-fp16": {"P100": False, "3090": True},
+    "qwen-coder-7b-merged-fp16": {"P100": False, "3090": True},
+    "gemma2-9b-merged-fp16": {"P100": False, "3090": True},
+    "qwen-14b-merged-fp16": {"P100": False, "3090": False},  # needs 2×GPU
+}
+
+# SLURM partition parameters
+SLURM_PARTITIONS = {
+    "P100": {"partition": "P100", "gres": "gpu:1", "mem": "16G"},
+    "3090": {"partition": "3090", "gres": "gpu:1", "mem": "32G"},
+}
+
+FAILOVER_WAIT_S = 30  # seconds to wait before falling back to dataia25
 
 HISTORY_PATH = APP_DIR / "history.json"
 ROOT_PATH = "/btgenerator_gradio"
@@ -393,7 +428,9 @@ def _filter_dataset(
     return results
 
 
-def _render_sample(sample: dict, idx_in_filtered: int, total_filtered: int) -> tuple:
+def _render_sample(
+    sample: dict, idx_in_filtered: int, total_filtered: int, original_index: int = -1
+) -> tuple:
     """Return (status_md, mission_html, score_html, port_html, xml_code, prompt_code, bt_viz_html)."""
     mission = sample.get("mission", "")
     xml = sample.get("xml", "")
@@ -407,8 +444,9 @@ def _render_sample(sample: dict, idx_in_filtered: int, total_filtered: int) -> t
     nodes = sample.get("nodes", 0)
     subtrees = sample.get("subtrees", 0)
 
+    ds_id = f" · **ID #{original_index + 1}**" if original_index >= 0 else ""
     status = (
-        f"**Sample {idx_in_filtered + 1} / {total_filtered}** — "
+        f"**Sample {idx_in_filtered + 1} / {total_filtered}**{ds_id} — "
         f"Catégorie : {cat_label} — Score : {score} — "
         f"{nodes} nœuds, {subtrees} sous-arbres"
     )
@@ -479,8 +517,8 @@ def ds_apply_filters(category, score_filter, search_text, port_filter="Tous"):
             *empty,
         )
 
-    _, sample = filtered[0]
-    display = _render_sample(sample, 0, len(filtered))
+    orig_idx, sample = filtered[0]
+    display = _render_sample(sample, 0, len(filtered), original_index=orig_idx)
     slider_update = gr.update(
         minimum=1,
         maximum=len(filtered),
@@ -495,8 +533,8 @@ def ds_navigate(filtered, slider_val):
     if not filtered:
         return 0, "**0 résultats**", "", "", "", "", "", ""
     idx = max(0, min(int(slider_val) - 1, len(filtered) - 1))
-    _, sample = filtered[idx]
-    display = _render_sample(sample, idx, len(filtered))
+    orig_idx, sample = filtered[idx]
+    display = _render_sample(sample, idx, len(filtered), original_index=orig_idx)
     return idx, *display
 
 
@@ -505,8 +543,8 @@ def ds_prev(filtered, current_idx):
     if not filtered:
         return 0, gr.update(), "**0 résultats**", "", "", "", "", "", ""
     idx = max(0, current_idx - 1)
-    _, sample = filtered[idx]
-    display = _render_sample(sample, idx, len(filtered))
+    orig_idx, sample = filtered[idx]
+    display = _render_sample(sample, idx, len(filtered), original_index=orig_idx)
     return idx, gr.update(value=idx + 1), *display
 
 
@@ -515,9 +553,199 @@ def ds_next(filtered, current_idx):
     if not filtered:
         return 0, gr.update(), "**0 résultats**", "", "", "", "", "", ""
     idx = min(len(filtered) - 1, current_idx + 1)
-    _, sample = filtered[idx]
-    display = _render_sample(sample, idx, len(filtered))
+    orig_idx, sample = filtered[idx]
+    display = _render_sample(sample, idx, len(filtered), original_index=orig_idx)
     return idx, gr.update(value=idx + 1), *display
+
+
+# ─── Compare two samples ────────────────────────────────────────────────────
+
+
+def _render_compare_card(sample: dict, label: str) -> str:
+    """Render a compact HTML card for one side of the comparison."""
+    mission = sample.get("mission", "")
+    score = sample.get("score", 0)
+    cat = sample.get("category", "")
+    cat_label = _CAT_LABELS.get(cat, cat)
+    nodes = sample.get("nodes", 0)
+    subtrees = sample.get("subtrees", 0)
+    xml_size = sample.get("xml_size", 0)
+    port_issues = sample.get("port_issues", [])
+
+    badge_color = "#22c55e" if score >= 1.0 else "#eab308"
+    port_color = "#4ade80" if not port_issues else "#fbbf24"
+    port_text = "✓ Ports OK" if not port_issues else f"⚠ {len(port_issues)} issue(s)"
+
+    return f"""
+    <div style="font-family:system-ui,sans-serif;">
+        <div style="font-size:11px;color:#64748b;text-transform:uppercase;
+                    letter-spacing:1px;margin-bottom:6px;">{label}</div>
+        <div style="padding:10px;background:#1e293b;border-radius:8px;
+                    border-left:4px solid #3b82f6;margin-bottom:8px;">
+            <span style="color:#f1f5f9;font-size:14px;">{mission}</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
+            <span style="background:{badge_color};color:white;padding:2px 8px;
+                         border-radius:4px;font-size:12px;font-weight:600;">Score {score}</span>
+            <span style="color:#9ca3af;font-size:11px;">{cat_label}</span>
+            <span style="color:#9ca3af;font-size:11px;">|</span>
+            <span style="color:#9ca3af;font-size:11px;">{nodes} nœuds · {subtrees} sous-arbres · {xml_size} chars</span>
+            <span style="color:{port_color};font-size:11px;">{port_text}</span>
+        </div>
+    </div>"""
+
+
+def _render_diff_summary(s1: dict, s2: dict) -> str:
+    """Render an HTML summary highlighting differences between two samples."""
+    rows = ""
+
+    def _diff_row(label, v1, v2, fmt=str):
+        color = "#4ade80" if v1 == v2 else "#fbbf24"
+        return (
+            f"<tr>"
+            f"<td style='padding:3px 8px;color:#94a3b8;font-size:12px;'>{label}</td>"
+            f"<td style='padding:3px 8px;text-align:right;font-size:12px;'>{fmt(v1)}</td>"
+            f"<td style='padding:3px 8px;text-align:center;color:{color};font-size:12px;'>"
+            f"{'=' if v1 == v2 else '≠'}</td>"
+            f"<td style='padding:3px 8px;text-align:right;font-size:12px;'>{fmt(v2)}</td>"
+            f"</tr>"
+        )
+
+    rows += _diff_row("Score", s1.get("score", 0), s2.get("score", 0))
+    rows += _diff_row(
+        "Catégorie",
+        _CAT_LABELS.get(s1.get("category", ""), s1.get("category", "")),
+        _CAT_LABELS.get(s2.get("category", ""), s2.get("category", "")),
+    )
+    rows += _diff_row("Nœuds", s1.get("nodes", 0), s2.get("nodes", 0))
+    rows += _diff_row("Sous-arbres", s1.get("subtrees", 0), s2.get("subtrees", 0))
+    rows += _diff_row("Feuilles", s1.get("leaf_nodes", 0), s2.get("leaf_nodes", 0))
+    rows += _diff_row(
+        "Taille XML",
+        s1.get("xml_size", 0),
+        s2.get("xml_size", 0),
+        lambda x: f"{x} chars",
+    )
+    rows += _diff_row(
+        "Ports OK",
+        len(s1.get("port_issues", [])) == 0,
+        len(s2.get("port_issues", [])) == 0,
+        lambda x: "✓" if x else "✗",
+    )
+
+    return f"""
+    <div style="margin:8px 0;">
+        <div style="font-size:12px;color:#64748b;text-transform:uppercase;
+                    letter-spacing:1px;margin-bottom:4px;">Comparaison</div>
+        <table style="width:100%;border-collapse:collapse;font-family:system-ui,sans-serif;">
+            <tr style="border-bottom:1px solid #374151;">
+                <th style="padding:3px 8px;text-align:left;font-size:11px;color:#64748b;">Métrique</th>
+                <th style="padding:3px 8px;text-align:right;font-size:11px;color:#3b82f6;">Sample A</th>
+                <th style="padding:3px 8px;text-align:center;font-size:11px;color:#64748b;"></th>
+                <th style="padding:3px 8px;text-align:right;font-size:11px;color:#f59e0b;">Sample B</th>
+            </tr>
+            {rows}
+        </table>
+    </div>"""
+
+
+def cmp_load_sample(sample_num: int, side: str):
+    """Load a sample by its 1-based index. Returns (card_html, xml, bt_viz_html)."""
+    idx = max(0, min(int(sample_num) - 1, len(DATASET) - 1))
+    if not DATASET:
+        return f"<p>Dataset vide</p>", "", ""
+    sample = DATASET[idx]
+    card = _render_compare_card(sample, f"Sample {side} (#{idx + 1})")
+    xml = sample.get("xml", "")
+    bt_html = render_bt_full_html(xml) if xml else ""
+    return card, xml, bt_html
+
+
+def _render_unified_diff_html(
+    xml_a: str, xml_b: str, label_a: str, label_b: str
+) -> str:
+    """Render a unified diff of two XML strings as syntax-highlighted HTML."""
+    import difflib
+
+    lines_a = xml_a.splitlines(keepends=True)
+    lines_b = xml_b.splitlines(keepends=True)
+    diff = difflib.unified_diff(
+        lines_a, lines_b, fromfile=label_a, tofile=label_b, lineterm=""
+    )
+
+    html_lines = []
+    for line in diff:
+        escaped = (
+            line.rstrip("\n")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+        if line.startswith("@@"):
+            html_lines.append(
+                f'<div style="background:#1e3a5f;color:#93c5fd;padding:1px 8px;'
+                f'font-size:11px;margin:4px 0 0;">{escaped}</div>'
+            )
+        elif line.startswith("---"):
+            html_lines.append(
+                f'<div style="color:#f87171;padding:1px 8px;font-weight:600;'
+                f'font-size:12px;border-bottom:1px solid #374151;">{escaped}</div>'
+            )
+        elif line.startswith("+++"):
+            html_lines.append(
+                f'<div style="color:#4ade80;padding:1px 8px;font-weight:600;'
+                f'font-size:12px;border-bottom:1px solid #374151;">{escaped}</div>'
+            )
+        elif line.startswith("-"):
+            html_lines.append(
+                f'<div style="background:#3b1219;color:#fca5a5;padding:1px 8px;">{escaped}</div>'
+            )
+        elif line.startswith("+"):
+            html_lines.append(
+                f'<div style="background:#052e16;color:#86efac;padding:1px 8px;">{escaped}</div>'
+            )
+        else:
+            html_lines.append(
+                f'<div style="color:#d1d5db;padding:1px 8px;">{escaped}</div>'
+            )
+
+    if not html_lines:
+        return (
+            '<div style="padding:12px;background:#1e293b;border-radius:8px;'
+            'font-family:monospace;font-size:12px;color:#4ade80;text-align:center;">'
+            "✓ Les deux XML sont identiques</div>"
+        )
+
+    content = "\n".join(html_lines)
+    return (
+        f'<div style="background:#0f172a;border:1px solid #334155;border-radius:8px;'
+        f"font-family:ui-monospace,monospace;font-size:11px;overflow-x:auto;"
+        f'max-height:600px;overflow-y:auto;padding:4px 0;">'
+        f"{content}</div>"
+    )
+
+
+def cmp_update_diff(num_a: int, num_b: int):
+    """Compute the diff summary between two samples."""
+    if not DATASET:
+        return ""
+    idx_a = max(0, min(int(num_a) - 1, len(DATASET) - 1))
+    idx_b = max(0, min(int(num_b) - 1, len(DATASET) - 1))
+    return _render_diff_summary(DATASET[idx_a], DATASET[idx_b])
+
+
+def cmp_load_both(num_a: int, num_b: int):
+    """Load both samples and compute diff. Returns all outputs."""
+    card_a, xml_a, viz_a = cmp_load_sample(num_a, "A")
+    card_b, xml_b, viz_b = cmp_load_sample(num_b, "B")
+    diff_summary = cmp_update_diff(num_a, num_b)
+    diff_xml = _render_unified_diff_html(
+        xml_a,
+        xml_b,
+        f"Sample A (#{int(num_a)})",
+        f"Sample B (#{int(num_b)})",
+    )
+    return card_a, viz_a, card_b, viz_b, diff_summary, diff_xml
 
 
 # ─── History persistence ────────────────────────────────────────────────────
@@ -554,34 +782,57 @@ def _run(cmd: str, timeout: float = 30) -> tuple[int, str]:
         return -1, str(e)
 
 
+def _run_bg(cmd: str, timeout: float = 30) -> int:
+    """Run a command without capturing output (fire-and-forget SSH).
+
+    Using capture_output=True with ssh -f or remote & causes subprocess.run
+    to block until the background child closes inherited pipe FDs — which
+    never happens until the remote process exits.  DEVNULL avoids this.
+    """
+    try:
+        r = subprocess.run(
+            cmd,
+            shell=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+        )
+        return r.returncode
+    except subprocess.TimeoutExpired:
+        return -1
+    except Exception:
+        return -1
+
+
 # ─── Cluster provisioning (sync version for Gradio) ────────────────────────
 
 
-def _check_cluster() -> bool:
+def _check_health(url: str, timeout: float = 5) -> dict | None:
+    """Fetch /health from a URL, return dict or None."""
     try:
-        r = httpx.get(f"{CLUSTER_URL}/health", timeout=5)
-        return r.status_code == 200
+        r = httpx.get(f"{url}/health", timeout=timeout)
+        if r.status_code == 200:
+            return r.json()
     except Exception:
-        return False
+        pass
+    return None
+
+
+def _check_cluster() -> bool:
+    return _check_health(TELECOM_URL) is not None
 
 
 def _check_dataia25() -> bool:
-    try:
-        r = httpx.get(f"{DATAIA25_URL}/health", timeout=3)
-        return r.status_code == 200
-    except Exception:
-        return False
+    return _check_health(DATAIA25_URL) is not None
 
 
-def _provision_cluster(progress=gr.Progress()) -> bool:
-    """Ensure VPN + route + SLURM job + SSH tunnel are up."""
-    if _check_cluster():
-        return True
-
-    progress(0.1, desc="Vérification du VPN...")
+def _ensure_vpn_and_gateway(progress=gr.Progress(), pct_start=0.05) -> bool:
+    """Ensure VPN + route + SSH to gpu-gw are up. Shared by all Télécom provisioning."""
+    progress(pct_start, desc="Vérification du VPN...")
     rc, _ = _run("nmcli -t -f NAME connection show --active | grep -q telecom-paris")
     if rc != 0:
-        progress(0.15, desc="Activation du VPN Télécom Paris...")
+        progress(pct_start + 0.02, desc="Activation du VPN Télécom Paris...")
         rc, out = _run("sudo nmcli connection up telecom-paris", timeout=15)
         if rc != 0:
             return False
@@ -594,80 +845,131 @@ def _provision_cluster(progress=gr.Progress()) -> bool:
         _run(f"sudo ip route add 137.194.0.0/16 dev {tun}")
 
     # Gateway
-    progress(0.2, desc="Connexion à la passerelle GPU...")
+    progress(pct_start + 0.05, desc="Connexion à la passerelle GPU...")
     rc, _ = _run(f"ssh -o ConnectTimeout=5 {GPU_HOST} echo ok", timeout=10)
-    if rc != 0:
-        return False
+    return rc == 0
 
-    # SLURM job
-    progress(0.3, desc="Vérification du job SLURM...")
+
+def _check_slurm_partition_free(partition: str) -> bool:
+    """Check if a SLURM partition has idle/mix nodes with free GPUs."""
+    rc, out = _run(
+        f"ssh -o ConnectTimeout=5 {GPU_HOST} "
+        f"\"sinfo -p {partition} -h -o '%t' | grep -qE 'idle|mix'\"",
+        timeout=10,
+    )
+    return rc == 0
+
+
+def _provision_telecom(
+    model_choice: str, partition: str, progress=gr.Progress(), pct_start: float = 0.1
+) -> bool:
+    """Submit SLURM job for a specific model on a specific partition.
+
+    Returns True if server ends up healthy on TELECOM_URL.
+    """
+    slurm_key = MODEL_SLURM_KEY.get(model_choice, "mistral_7b")
+    part_cfg = SLURM_PARTITIONS[partition]
+
+    # Check if our job is already running with the right model
+    progress(pct_start, desc=f"Vérification job SLURM ({partition})...")
     rc, running = _run(
         f"ssh -o ConnectTimeout=5 {GPU_HOST} "
         f"'squeue -u $(whoami) -h -t R -n nav4rail-serve --format=\"%j\"'",
         timeout=15,
     )
-    if not running.strip():
+
+    if running.strip():
+        # Job running — check if it's serving the right model
+        health = _check_health(TELECOM_URL, timeout=5)
+        if health and health.get("model") == model_choice:
+            return True
+        # Wrong model or not reachable yet — cancel and resubmit
         _run(
-            f"ssh {GPU_HOST} 'scancel -u $(whoami) -n nav4rail-serve -t PD 2>/dev/null'",
+            f"ssh {GPU_HOST} 'scancel -u $(whoami) -n nav4rail-serve 2>/dev/null'",
             timeout=10,
         )
-        progress(0.35, desc="Soumission du job GPU...")
-        rc, job_out = _run(
-            f"ssh {GPU_HOST} 'cd ~/nav4rail_serve && "
-            f"MODEL_DIR={REMOTE_MODEL_DIR} sbatch --parsable job_serve.sh'",
-            timeout=15,
+        time.sleep(3)
+
+    # Cancel any pending jobs
+    _run(
+        f"ssh {GPU_HOST} 'scancel -u $(whoami) -n nav4rail-serve -t PD 2>/dev/null'",
+        timeout=10,
+    )
+
+    # Submit new job
+    progress(pct_start + 0.05, desc=f"Soumission job {partition} ({slurm_key})...")
+    rc, job_out = _run(
+        f"ssh {GPU_HOST} 'cd ~/nav4rail_serve && "
+        f"MODEL_KEY={slurm_key} sbatch --parsable "
+        f"--partition={part_cfg['partition']} --gres={part_cfg['gres']} "
+        f"--mem={part_cfg['mem']} job_serve_fp16.sh'",
+        timeout=15,
+    )
+    job_id = job_out.strip()
+    if rc != 0 or not job_id.isdigit():
+        return False
+
+    # Wait for GPU allocation
+    node_name = ""
+    for attempt in range(18):
+        progress(
+            pct_start + 0.1 + attempt * 0.02,
+            desc=f"En attente d'un GPU {partition}... ({(attempt + 1) * 10}s)",
         )
-        job_id = job_out.strip()
-        if rc != 0 or not job_id.isdigit():
+        time.sleep(10)
+        rc, state = _run(
+            f"ssh -o ConnectTimeout=5 {GPU_HOST} "
+            f"'squeue -j {job_id} -h --format=\"%T %N\"'",
+            timeout=10,
+        )
+        parts = state.strip().split()
+        state_val = parts[0] if parts else ""
+        if state_val == "RUNNING":
+            node_name = parts[1] if len(parts) > 1 else ""
+            log.info(f"[provision] Job {job_id} running on {node_name}")
+            progress(pct_start + 0.45, desc=f"Job GPU démarré sur {node_name} !")
+            time.sleep(8)
+            break
+        if state_val == "" or "FAILED" in state_val or "CANCELLED" in state_val:
             return False
+    else:
+        return False
 
-        # Wait for GPU
-        for attempt in range(18):
-            progress(
-                0.4 + attempt * 0.02,
-                desc=f"En attente d'un GPU... ({(attempt + 1) * 10}s)",
-            )
-            time.sleep(10)
-            rc, state = _run(
-                f"ssh -o ConnectTimeout=5 {GPU_HOST} "
-                f"'squeue -j {job_id} -h --format=\"%T\"'",
-                timeout=10,
-            )
-            state = state.strip()
-            if state == "RUNNING":
-                progress(0.75, desc="Job GPU démarré ! Chargement du modèle...")
-                time.sleep(8)
-                break
-            if state == "" or "FAILED" in state or "CANCELLED" in state:
-                return False
-        else:
-            return False
+    # Wait for server ready (curl via node name, not localhost on gw)
+    health_target = (
+        f"http://{node_name}:{CLUSTER_PORT}"
+        if node_name
+        else f"http://localhost:{CLUSTER_PORT}"
+    )
+    progress(pct_start + 0.5, desc="Attente du serveur d'inférence...")
+    for _ in range(48):  # up to ~240s (first run needs merge on disk)
+        rc, health = _run(
+            f"ssh -o ConnectTimeout=5 {GPU_HOST} "
+            f"'curl -s --max-time 3 {health_target}/health'",
+            timeout=10,
+        )
+        if '"status":"ok"' in health:
+            break
+        time.sleep(5)
+    else:
+        return False
 
-        # Wait for server ready
-        progress(0.8, desc="Chargement du modèle sur le GPU...")
-        for _ in range(12):
-            rc, health = _run(
-                f"ssh -o ConnectTimeout=5 {GPU_HOST} "
-                f"'curl -s --max-time 3 http://localhost:{CLUSTER_PORT}/health'",
-                timeout=10,
-            )
-            if '"status":"ok"' in health:
-                break
-            time.sleep(5)
-
-    # SSH tunnel
-    _run(f"pkill -f 'ssh.*-L {CLUSTER_PORT}:localhost:{CLUSTER_PORT}' 2>/dev/null")
+    # SSH tunnel (through gw, targeting the compute node)
+    _run(f"pkill -f 'ssh.*-L {CLUSTER_PORT}:' 2>/dev/null")
     time.sleep(1)
-    progress(0.9, desc="Ouverture du tunnel SSH...")
+    tunnel_target = (
+        f"{node_name}:{CLUSTER_PORT}" if node_name else f"localhost:{CLUSTER_PORT}"
+    )
+    progress(pct_start + 0.7, desc="Ouverture du tunnel SSH...")
     rc, _ = _run(
-        f"ssh -fN -L {CLUSTER_PORT}:localhost:{CLUSTER_PORT} {GPU_HOST} "
+        f"ssh -fN -L {CLUSTER_PORT}:{tunnel_target} {GPU_HOST} "
         f"-o ServerAliveInterval=30 -o ServerAliveCountMax=3 "
         f"-o ExitOnForwardFailure=yes",
         timeout=10,
     )
     if rc != 0:
         _run(
-            f"nohup ssh -N -L {CLUSTER_PORT}:localhost:{CLUSTER_PORT} {GPU_HOST} "
+            f"nohup ssh -N -L {CLUSTER_PORT}:{tunnel_target} {GPU_HOST} "
             f"-o ServerAliveInterval=30 -o ServerAliveCountMax=3 "
             f"-o ExitOnForwardFailure=yes </dev/null >/dev/null 2>&1 &",
             timeout=5,
@@ -677,11 +979,83 @@ def _provision_cluster(progress=gr.Progress()) -> bool:
     # Final check
     for _ in range(6):
         if _check_cluster():
-            progress(1.0, desc="Cluster GPU prêt !")
             return True
         time.sleep(2)
-
     return False
+
+
+def _smart_provision(
+    model_choice: str, progress=gr.Progress()
+) -> tuple[str | None, str]:
+    """Smart failover provisioning. Returns (target_url, cluster_label) or (None, error_msg).
+
+    Strategy:
+      - Mistral 7B: P100 → 3090 → dataia25
+      - Llama/Qwen Coder/Gemma: 3090 → dataia25
+      - Qwen 14B: dataia25 only
+    """
+    log.info(f"[provision] Starting smart provision for {model_choice}")
+    fits = MODEL_GPU_FIT.get(model_choice, {})
+
+    # 1) Fast path: check both clusters for already-serving model
+    health_telecom = _check_health(TELECOM_URL, timeout=3)
+    if health_telecom and health_telecom.get("model") == model_choice:
+        return TELECOM_URL, "Télécom Paris"
+
+    health_dataia = _check_health(DATAIA25_URL, timeout=3)
+    if health_dataia and health_dataia.get("model") == model_choice:
+        log.info(f"[provision] Fast path: DataIA25 already serving {model_choice}")
+        return DATAIA25_URL, "DataIA25"
+
+    log.info(
+        f"[provision] No cluster serving {model_choice} — telecom={health_telecom is not None} dataia25={health_dataia is not None}"
+    )
+
+    # 2) Determine partition order for Télécom
+    partitions_to_try = []
+    if fits.get("P100"):
+        partitions_to_try.append("P100")
+    if fits.get("3090"):
+        partitions_to_try.append("3090")
+
+    # 3) Try Télécom partitions
+    log.info(f"[provision] Télécom partitions to try: {partitions_to_try}")
+    if partitions_to_try:
+        progress(0.05, desc="Connexion à Télécom Paris...")
+        vpn_ok = _ensure_vpn_and_gateway(progress, pct_start=0.05)
+        if vpn_ok:
+            for partition in partitions_to_try:
+                progress(0.12, desc=f"Vérification partition {partition}...")
+                if _check_slurm_partition_free(partition):
+                    ok = _provision_telecom(
+                        model_choice, partition, progress, pct_start=0.15
+                    )
+                    if ok:
+                        return TELECOM_URL, f"Télécom Paris ({partition})"
+
+            # No partition had free GPUs — wait FAILOVER_WAIT_S then try dataia25
+            progress(0.5, desc=f"Télécom Paris occupé, attente {FAILOVER_WAIT_S}s...")
+            time.sleep(FAILOVER_WAIT_S)
+
+            # Re-check after wait
+            for partition in partitions_to_try:
+                if _check_slurm_partition_free(partition):
+                    ok = _provision_telecom(
+                        model_choice, partition, progress, pct_start=0.55
+                    )
+                    if ok:
+                        return TELECOM_URL, f"Télécom Paris ({partition})"
+
+    # 4) Fallback to dataia25
+    log.info(f"[provision] Falling back to DataIA25 for {model_choice}")
+    progress(0.7, desc="Basculement vers DataIA25...")
+    dataia25_ok = _provision_dataia25(model_choice, progress)
+    if dataia25_ok:
+        log.info(f"[provision] DataIA25 provisioning succeeded for {model_choice}")
+        return DATAIA25_URL, "DataIA25"
+
+    log.error(f"[provision] ALL clusters failed for {model_choice}")
+    return None, "Aucun cluster disponible"
 
 
 # ─── Generation logic ──────────────────────────────────────────────────────
@@ -691,43 +1065,26 @@ def generate_bt(
     mission: str,
     use_grammar: bool,
     model_choice: str,
-    cluster_choice: str,
     progress=gr.Progress(),
 ) -> tuple[str, str, str, str]:
-    """Generate BT XML via cluster. Returns (xml, validation_html, status, bt_viz_html)."""
+    """Generate BT XML via smart failover. Returns (xml, validation_html, status, bt_viz_html)."""
     if not mission.strip():
         return "", "", "Veuillez entrer une mission.", ""
 
-    # Determine target URL
-    if cluster_choice == "dataia25":
-        progress(0.05, desc="Connexion à DataIA25...")
-        dataia25_ok = _provision_dataia25(progress)
-        if not dataia25_ok:
-            return (
-                "",
-                "",
-                "DataIA25 inaccessible. Vérifiez le VPN et la machine dataia25.",
-                "",
-            )
-        target_url = DATAIA25_URL
-    else:
-        # Télécom Paris (with provisioning)
-        progress(0.05, desc="Connexion au cluster Télécom Paris...")
-        cluster_ok = _provision_cluster(progress)
-        if not cluster_ok:
-            return (
-                "",
-                "",
-                "Cluster Télécom Paris inaccessible. Vérifiez le VPN et le cluster.",
-                "",
-            )
-        target_url = TELECOM_URL
+    # Resolve model
+    if not model_choice or model_choice == "auto":
+        model_choice = "mistral-7b-merged-fp16"
+
+    # Smart provisioning with failover
+    target_url, cluster_label = _smart_provision(model_choice, progress)
+    if target_url is None:
+        return "", "", f"Erreur : {cluster_label}", ""
 
     payload = {"mission": mission, "use_grammar": use_grammar}
     if model_choice and model_choice != "auto":
         payload["model"] = model_choice
 
-    progress(0.95, desc="Génération en cours sur le GPU...")
+    progress(0.95, desc=f"Génération en cours sur {cluster_label}...")
     try:
         r = httpx.post(
             f"{target_url}/generate",
@@ -762,7 +1119,6 @@ def generate_bt(
 
     model_used = result.get("model", "unknown")
     model_label = MODEL_LABELS.get(model_used, model_used)
-    cluster_label = CLUSTER_LABELS.get(cluster_choice, cluster_choice)
     port_issues = validate_ports(xml) if xml else []
     validation_html = _build_validation_html(
         valid, score, errors, warnings, port_issues
@@ -1021,49 +1377,152 @@ def _ensure_dataia25_tunnel() -> bool:
     return False
 
 
-def _provision_dataia25(progress=gr.Progress()) -> bool:
+def _provision_dataia25(
+    model_choice: str = "mistral-7b-merged-fp16", progress=gr.Progress()
+) -> bool:
     """Full auto-provisioning: tunnel + start server if needed + wait for ready."""
-    # 1) Fast path: server already running and tunnel up
-    if _ensure_dataia25_tunnel():
+    dataia25_key = MODEL_DATAIA25_KEY.get(model_choice, "mistral_7b")
+
+    # 1) Fast path: server already running with right model and tunnel up
+    health = _check_health(DATAIA25_URL, timeout=3)
+    if health and health.get("model") == model_choice:
         return True
+
+    # Also check via SSH in case tunnel is down but server is running
+    if not health:
+        rc, health_str = _run(
+            f"ssh -o ConnectTimeout=5 dataia25 "
+            f"'curl -s --max-time 3 http://localhost:{DATAIA25_PORT}/health'",
+            timeout=10,
+        )
+        if '"status":"ok"' in health_str:
+            import json as _json
+
+            try:
+                health = _json.loads(health_str)
+            except Exception:
+                health = None
+
+    if health and health.get("model") == model_choice:
+        # Server ready but tunnel down — just fix the tunnel
+        progress(0.85, desc="Reconnexion tunnel DataIA25...")
+        if _ensure_dataia25_tunnel():
+            return True
+
+    # If server running with wrong model, kill and restart
+    if health and health.get("model") != model_choice:
+        progress(0.1, desc=f"Changement de modèle DataIA25 → {dataia25_key}...")
+        _run(
+            "ssh -o ConnectTimeout=5 dataia25 "
+            "'fuser -k 8080/tcp 2>/dev/null; sleep 1; "
+            "pkill -9 -f run_serve_hf 2>/dev/null; "
+            'pkill -9 -f "python3.*FastAPI" 2>/dev/null; '
+            'pkill -9 -f "python3.*uvicorn" 2>/dev/null; '
+            'pkill -9 -f "python3.*-c.*import" 2>/dev/null\'',
+            timeout=15,
+        )
+        # Wait for CUDA VRAM to be released (GPU processes take time to free)
+        time.sleep(8)
+        # Verify GPU is free
+        rc, gpu_mem = _run(
+            "ssh -o ConnectTimeout=3 dataia25 "
+            "'nvidia-smi -i 1 --query-gpu=memory.used --format=csv,noheader,nounits'",
+            timeout=8,
+        )
+        try:
+            mem_mb = int(gpu_mem.strip())
+            if mem_mb > 1000:
+                log.warning(
+                    f"[dataia25] GPU still has {mem_mb} MiB in use after kill, retrying kill..."
+                )
+                _run(
+                    "ssh -o ConnectTimeout=5 dataia25 "
+                    "'fuser -k 8080/tcp 2>/dev/null; "
+                    'pkill -9 -f "python3.*-c.*import" 2>/dev/null\'',
+                    timeout=10,
+                )
+                time.sleep(10)
+        except (ValueError, AttributeError):
+            pass
 
     # 2) SSH to dataia25 and check if serve process is running
     progress(0.1, desc="Vérification du serveur DataIA25...")
     rc, out = _run(
         "ssh -o ConnectTimeout=5 dataia25 "
-        "'pgrep -af \"python.*run_serve_hf_mistral\" || echo NO_PROCESS'",
+        "'pgrep -af run_serve_hf | grep -v pgrep || echo NO_PROCESS'",
         timeout=10,
     )
     server_running = rc == 0 and "NO_PROCESS" not in out
 
     # 3) Start the serve script if not running
     if not server_running:
-        progress(0.15, desc="Démarrage du serveur Mistral fp16 sur DataIA25...")
-        rc, _ = _run(
-            "ssh -o ConnectTimeout=5 dataia25 "
-            "'cd ~/nav4rail && nohup bash run_serve_hf_mistral.sh "
-            "> serve_hf_mistral.log 2>&1 & disown'",
+        model_label = MODEL_LABELS.get(model_choice, dataia25_key)
+        progress(0.15, desc=f"Démarrage {model_label} fp16 sur DataIA25...")
+        # ssh -f: fork after auth so parent exits immediately.
+        # _run_bg (DEVNULL): prevents pipe deadlock that killed capture_output.
+        rc = _run_bg(
+            f"ssh -f -o ConnectTimeout=5 dataia25 "
+            f"'cd ~/nav4rail && nohup bash run_serve_hf_dataia25.sh {dataia25_key} "
+            f"> serve_{dataia25_key}.log 2>&1 </dev/null &'",
             timeout=15,
         )
         if rc != 0:
-            return False
+            log.warning(f"[dataia25] ssh -f launch failed (rc={rc}), retrying...")
+            rc = _run_bg(
+                f"ssh -o ConnectTimeout=5 dataia25 "
+                f"'cd ~/nav4rail && setsid nohup bash run_serve_hf_dataia25.sh {dataia25_key} "
+                f"> serve_{dataia25_key}.log 2>&1 </dev/null &'",
+                timeout=20,
+            )
+            if rc != 0:
+                return False
+        time.sleep(3)  # give the script time to parse args and start
 
-    # 4) Wait for the server to become ready (loading model takes ~30-60s)
-    progress(0.25, desc="Chargement du modèle sur le GPU (~30s)...")
-    for attempt in range(24):  # up to ~120s
-        progress(
-            0.25 + attempt * 0.025,
-            desc=f"Chargement du modèle... ({(attempt + 1) * 5}s)",
+    # 4) Wait for the server to become ready
+    #    First-time download can take ~400-600s (18GB model + LoRA merge + GPU load)
+    max_wait = 120  # 120 × 5s = 600s max
+    progress(0.2, desc="Chargement du modèle sur le GPU...")
+    for attempt in range(max_wait):
+        pct = 0.2 + (attempt / max_wait) * 0.65
+
+        # Read last log line for progress feedback
+        rc_log, log_tail = _run(
+            f"ssh -o ConnectTimeout=3 dataia25 "
+            f"'tail -1 ~/nav4rail/serve_{dataia25_key}.log 2>/dev/null'",
+            timeout=8,
         )
+        if "Downloading" in log_tail or "Fetching" in log_tail:
+            progress(pct, desc=f"Téléchargement du modèle... ({(attempt + 1) * 5}s)")
+        elif "LoRA" in log_tail or "merge" in log_tail.lower():
+            progress(pct, desc=f"Fusion LoRA en mémoire... ({(attempt + 1) * 5}s)")
+        elif "Moving model" in log_tail or "to GPU" in log_tail:
+            progress(pct, desc=f"Transfert vers le GPU... ({(attempt + 1) * 5}s)")
+        else:
+            progress(pct, desc=f"Chargement du modèle... ({(attempt + 1) * 5}s)")
+
         time.sleep(5)
-        # Check directly via SSH (tunnel may not be up yet)
-        rc, health = _run(
+
+        # Check health directly via SSH (tunnel may not be up yet)
+        rc, health_str = _run(
             f"ssh -o ConnectTimeout=3 dataia25 "
             f"'curl -s --max-time 3 http://localhost:{DATAIA25_PORT}/health'",
             timeout=10,
         )
-        if '"status":"ok"' in health:
+        if (
+            '"status":"ok"' in health_str
+            and f'"model":"{model_choice}"' in health_str.replace(" ", "")
+        ):
             break
+
+        # Every 30s, check if process is still alive (fail fast on crash)
+        if attempt > 0 and attempt % 6 == 0:
+            rc_proc, proc_out = _run(
+                "ssh -o ConnectTimeout=3 dataia25 "
+                "'pgrep -af run_serve_hf | grep -v pgrep || echo NO_PROCESS'",
+                timeout=8,
+            )
+            if "NO_PROCESS" in proc_out:
+                return False
     else:
         return False
 
@@ -1095,9 +1554,13 @@ def _build_cluster_banner_html() -> str:
             detail = f"{gpu_name}{backend_tag} — {model_label}"
             remaining = info.get("remaining_s")
             if remaining is not None:
-                mins = remaining // 60
+                hrs = remaining // 3600
+                mins = (remaining % 3600) // 60
                 secs = remaining % 60
-                detail += f" — ⏱ {mins}m{secs:02d}s"
+                if hrs > 0:
+                    detail += f" — ⏱ {hrs}h{mins:02d}m{secs:02d}s"
+                else:
+                    detail += f" — ⏱ {mins}m{secs:02d}s"
 
             items_html += (
                 f'<div style="display:inline-flex;align-items:center;gap:8px;padding:4px 12px;'
@@ -1153,20 +1616,11 @@ CSS = """
 """
 
 
-def _on_model_change(model_choice):
-    """Auto-switch cluster based on model selection. No reverse callback → no loop."""
-    if model_choice in DATAIA25_MODELS:
-        return gr.update(value="dataia25")
-    if model_choice in TELECOM_MODELS:
-        return gr.update(value="telecom-paris")
-    return gr.update()  # "auto" → keep current cluster
-
-
 def build_app() -> gr.Blocks:
     with gr.Blocks(title="NAV4RAIL BT Generator", theme=THEME, css=CSS) as app:
         gr.Markdown("# NAV4RAIL — Behavior Tree Generator", elem_classes="main-title")
         gr.Markdown(
-            "Génération via cluster GPU Télécom Paris ou DataIA25 | Validation locale",
+            "Génération via GPU cluster (Télécom Paris / DataIA25) | Validation locale",
             elem_classes="subtitle",
         )
 
@@ -1174,8 +1628,9 @@ def build_app() -> gr.Blocks:
             value=get_cluster_status_html(),
             elem_id="cluster-status-box",
         )
-        # every=3 is smooth because get_cluster_status_html() returns cached HTML instantly
-        app.load(fn=get_cluster_status_html, outputs=[cluster_status], every=3)
+        # Periodic refresh using gr.Timer (Gradio 5.x compatible)
+        _cluster_timer = gr.Timer(value=3)
+        _cluster_timer.tick(fn=get_cluster_status_html, outputs=[cluster_status])
 
         with gr.Tabs():
             # ─── Tab 1: Génération ──────────────────────────────────────
@@ -1189,28 +1644,18 @@ def build_app() -> gr.Blocks:
                         )
                         with gr.Row():
                             model_selector = gr.Dropdown(
-                                choices=[("Auto (modèle courant)", "auto")]
-                                + [(label, key) for key, label in MODEL_LABELS.items()],
-                                value="auto",
-                                label="Modèle",
-                                scale=2,
-                            )
-                            cluster_selector = gr.Dropdown(
                                 choices=[
-                                    ("Télécom Paris (GGUF, SLURM)", "telecom-paris"),
-                                    (
-                                        "DataIA25 (Mistral fp16, auto-shutdown 15min)",
-                                        "dataia25",
-                                    ),
+                                    (label, key) for key, label in MODEL_LABELS.items()
                                 ],
-                                value="telecom-paris",
-                                label="Cluster",
-                                scale=2,
+                                value="mistral-7b-merged-fp16",
+                                label="Modèle",
+                                scale=3,
                             )
                             use_grammar = gr.Checkbox(
                                 label="Grammaire GBNF",
-                                value=True,
+                                value=False,
                                 scale=1,
+                                visible=False,
                             )
                         generate_btn = gr.Button(
                             "Générer le Behavior Tree",
@@ -1242,7 +1687,6 @@ def build_app() -> gr.Blocks:
                         mission_input,
                         use_grammar,
                         model_selector,
-                        cluster_selector,
                     ],
                     outputs=[xml_output, gen_validation, gen_status, gen_bt_viz],
                 )
@@ -1251,13 +1695,6 @@ def build_app() -> gr.Blocks:
                     fn=lambda x: x[0],
                     inputs=[examples],
                     outputs=[mission_input],
-                )
-
-                # Model selection auto-switches cluster (one-way, no loop)
-                model_selector.change(
-                    fn=_on_model_change,
-                    inputs=[model_selector],
-                    outputs=[cluster_selector],
                 )
 
             # ─── Tab 2: Validation ──────────────────────────────────────
@@ -1316,165 +1753,244 @@ def build_app() -> gr.Blocks:
                     gr.HTML(value=_build_stats_html(DATASET_STATS))
 
                 gr.Markdown("---")
-                gr.Markdown("### Explorateur de samples")
 
-                # --- Filters ---
-                with gr.Row():
-                    ds_cat_filter = gr.Dropdown(
-                        choices=["Toutes"] + [f"{c}" for c in _CAT_ORDER],
-                        value="Toutes",
-                        label="Catégorie",
-                        scale=2,
-                    )
-                    ds_score_filter = gr.Radio(
-                        choices=["Tous", "1.0", "0.9"],
-                        value="Tous",
-                        label="Score",
-                        scale=1,
-                    )
-                    ds_port_filter = gr.Radio(
-                        choices=["Tous", "L4 OK", "L4 Issues"],
-                        value="Tous",
-                        label="Ports (L4)",
-                        scale=1,
-                    )
-                    ds_search = gr.Textbox(
-                        label="Recherche dans la mission",
-                        placeholder="Ex: km 42, ballast, simulation…",
-                        scale=2,
-                    )
-                    ds_filter_btn = gr.Button("Filtrer", variant="primary", scale=0)
-
-                # --- State ---
-                ds_filtered_state = gr.State([(i, s) for i, s in enumerate(DATASET)])
-                ds_idx_state = gr.State(0)
-
-                # --- Navigator ---
-                with gr.Row():
-                    ds_prev_btn = gr.Button("◀ Précédent", size="sm", scale=0)
-                    ds_slider = gr.Slider(
-                        minimum=1,
-                        maximum=max(len(DATASET), 1),
-                        value=1,
-                        step=1,
-                        label=f"Sample (1–{len(DATASET)})",
-                        scale=3,
-                    )
-                    ds_next_btn = gr.Button("Suivant ▶", size="sm", scale=0)
-
-                ds_status = gr.Markdown("Chargement…")
-
-                # --- Sample display ---
-                ds_mission_html = gr.HTML()
-                with gr.Row():
-                    ds_score_html = gr.HTML()
-                ds_port_html = gr.HTML()
-
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        ds_xml = gr.Code(
-                            label="XML du Behavior Tree",
-                            language="html",
-                            lines=18,
-                        )
-                    with gr.Column(scale=1):
-                        with gr.Accordion("Prompt envoyé au LLM 70B", open=False):
-                            ds_prompt = gr.Code(
-                                label="Prompt complet",
-                                language=None,
-                                lines=18,
+                with gr.Tabs():
+                    # ──── Sub-tab: Explorateur ──────────────────────────
+                    with gr.Tab("Explorateur", id="ds-explore"):
+                        # --- Filters ---
+                        with gr.Row():
+                            ds_cat_filter = gr.Dropdown(
+                                choices=["Toutes"] + [f"{c}" for c in _CAT_ORDER],
+                                value="Toutes",
+                                label="Catégorie",
+                                scale=2,
+                            )
+                            ds_score_filter = gr.Radio(
+                                choices=["Tous", "1.0", "0.9"],
+                                value="Tous",
+                                label="Score",
+                                scale=1,
+                            )
+                            ds_port_filter = gr.Radio(
+                                choices=["Tous", "L4 OK", "L4 Issues"],
+                                value="Tous",
+                                label="Ports (L4)",
+                                scale=1,
+                            )
+                            ds_search = gr.Textbox(
+                                label="Recherche dans la mission",
+                                placeholder="Ex: km 42, ballast, simulation…",
+                                scale=2,
+                            )
+                            ds_filter_btn = gr.Button(
+                                "Filtrer", variant="primary", scale=0
                             )
 
-                ds_bt_viz = gr.HTML(
-                    label="Behavior Tree",
-                    elem_id="ds-bt-viz",
-                )
+                        # --- State ---
+                        ds_filtered_state = gr.State(
+                            [(i, s) for i, s in enumerate(DATASET)]
+                        )
+                        ds_idx_state = gr.State(0)
 
-                # --- Wire filter callback ---
-                _ds_filter_inputs = [
-                    ds_cat_filter,
-                    ds_score_filter,
-                    ds_search,
-                    ds_port_filter,
-                ]
-                _ds_filter_outputs = [
-                    ds_filtered_state,
-                    ds_idx_state,
-                    ds_slider,
-                    ds_status,
-                    ds_mission_html,
-                    ds_score_html,
-                    ds_port_html,
-                    ds_xml,
-                    ds_prompt,
-                    ds_bt_viz,
-                ]
-                ds_filter_btn.click(
-                    fn=ds_apply_filters,
-                    inputs=_ds_filter_inputs,
-                    outputs=_ds_filter_outputs,
-                )
-                # Also trigger on Enter in search box
-                ds_search.submit(
-                    fn=ds_apply_filters,
-                    inputs=_ds_filter_inputs,
-                    outputs=_ds_filter_outputs,
-                )
+                        # --- Navigator ---
+                        with gr.Row():
+                            ds_prev_btn = gr.Button("◀ Précédent", size="sm", scale=0)
+                            ds_slider = gr.Slider(
+                                minimum=1,
+                                maximum=max(len(DATASET), 1),
+                                value=1,
+                                step=1,
+                                label=f"Sample (1–{len(DATASET)})",
+                                scale=3,
+                            )
+                            ds_next_btn = gr.Button("Suivant ▶", size="sm", scale=0)
 
-                # --- Wire slider navigation ---
-                ds_slider.change(
-                    fn=ds_navigate,
-                    inputs=[ds_filtered_state, ds_slider],
-                    outputs=[
-                        ds_idx_state,
-                        ds_status,
-                        ds_mission_html,
-                        ds_score_html,
-                        ds_port_html,
-                        ds_xml,
-                        ds_prompt,
-                        ds_bt_viz,
-                    ],
-                )
+                        ds_status = gr.Markdown("Chargement…")
 
-                # --- Wire prev/next buttons ---
-                ds_prev_btn.click(
-                    fn=ds_prev,
-                    inputs=[ds_filtered_state, ds_idx_state],
-                    outputs=[
-                        ds_idx_state,
-                        ds_slider,
-                        ds_status,
-                        ds_mission_html,
-                        ds_score_html,
-                        ds_port_html,
-                        ds_xml,
-                        ds_prompt,
-                        ds_bt_viz,
-                    ],
-                )
-                ds_next_btn.click(
-                    fn=ds_next,
-                    inputs=[ds_filtered_state, ds_idx_state],
-                    outputs=[
-                        ds_idx_state,
-                        ds_slider,
-                        ds_status,
-                        ds_mission_html,
-                        ds_score_html,
-                        ds_port_html,
-                        ds_xml,
-                        ds_prompt,
-                        ds_bt_viz,
-                    ],
-                )
+                        # --- Sample display ---
+                        ds_mission_html = gr.HTML()
+                        with gr.Row():
+                            ds_score_html = gr.HTML()
+                        ds_port_html = gr.HTML()
 
-                # --- Initial load: display first sample ---
-                app.load(
-                    fn=ds_apply_filters,
-                    inputs=_ds_filter_inputs,
-                    outputs=_ds_filter_outputs,
-                )
+                        with gr.Row():
+                            with gr.Column(scale=1):
+                                ds_xml = gr.Code(
+                                    label="XML du Behavior Tree",
+                                    language="html",
+                                    lines=18,
+                                )
+                            with gr.Column(scale=1):
+                                with gr.Accordion(
+                                    "Prompt envoyé au LLM 70B", open=False
+                                ):
+                                    ds_prompt = gr.Code(
+                                        label="Prompt complet",
+                                        language=None,
+                                        lines=18,
+                                    )
+
+                        ds_bt_viz = gr.HTML(
+                            label="Behavior Tree",
+                            elem_id="ds-bt-viz",
+                        )
+
+                        # --- Wire filter callback ---
+                        _ds_filter_inputs = [
+                            ds_cat_filter,
+                            ds_score_filter,
+                            ds_search,
+                            ds_port_filter,
+                        ]
+                        _ds_filter_outputs = [
+                            ds_filtered_state,
+                            ds_idx_state,
+                            ds_slider,
+                            ds_status,
+                            ds_mission_html,
+                            ds_score_html,
+                            ds_port_html,
+                            ds_xml,
+                            ds_prompt,
+                            ds_bt_viz,
+                        ]
+                        ds_filter_btn.click(
+                            fn=ds_apply_filters,
+                            inputs=_ds_filter_inputs,
+                            outputs=_ds_filter_outputs,
+                        )
+                        ds_search.submit(
+                            fn=ds_apply_filters,
+                            inputs=_ds_filter_inputs,
+                            outputs=_ds_filter_outputs,
+                        )
+
+                        # --- Wire slider navigation ---
+                        ds_slider.change(
+                            fn=ds_navigate,
+                            inputs=[ds_filtered_state, ds_slider],
+                            outputs=[
+                                ds_idx_state,
+                                ds_status,
+                                ds_mission_html,
+                                ds_score_html,
+                                ds_port_html,
+                                ds_xml,
+                                ds_prompt,
+                                ds_bt_viz,
+                            ],
+                        )
+
+                        # --- Wire prev/next buttons ---
+                        ds_prev_btn.click(
+                            fn=ds_prev,
+                            inputs=[ds_filtered_state, ds_idx_state],
+                            outputs=[
+                                ds_idx_state,
+                                ds_slider,
+                                ds_status,
+                                ds_mission_html,
+                                ds_score_html,
+                                ds_port_html,
+                                ds_xml,
+                                ds_prompt,
+                                ds_bt_viz,
+                            ],
+                        )
+                        ds_next_btn.click(
+                            fn=ds_next,
+                            inputs=[ds_filtered_state, ds_idx_state],
+                            outputs=[
+                                ds_idx_state,
+                                ds_slider,
+                                ds_status,
+                                ds_mission_html,
+                                ds_score_html,
+                                ds_port_html,
+                                ds_xml,
+                                ds_prompt,
+                                ds_bt_viz,
+                            ],
+                        )
+
+                        # --- Initial load: display first sample ---
+                        app.load(
+                            fn=ds_apply_filters,
+                            inputs=_ds_filter_inputs,
+                            outputs=_ds_filter_outputs,
+                        )
+
+                    # ──── Sub-tab: Comparateur ──────────────────────────
+                    with gr.Tab("Comparateur", id="ds-compare"):
+                        gr.Markdown(
+                            "Sélectionnez deux samples par leur numéro pour les comparer côte à côte."
+                        )
+
+                        with gr.Row():
+                            with gr.Column(scale=1):
+                                cmp_num_a = gr.Number(
+                                    label="Sample A (n°)",
+                                    value=1,
+                                    minimum=1,
+                                    maximum=max(len(DATASET), 1),
+                                    precision=0,
+                                )
+                            with gr.Column(scale=1):
+                                cmp_num_b = gr.Number(
+                                    label="Sample B (n°)",
+                                    value=min(2, len(DATASET)),
+                                    minimum=1,
+                                    maximum=max(len(DATASET), 1),
+                                    precision=0,
+                                )
+                            cmp_btn = gr.Button("Comparer", variant="primary", scale=0)
+
+                        # --- Diff summary ---
+                        cmp_diff_html = gr.HTML()
+
+                        # --- Unified XML diff ---
+                        cmp_diff_xml = gr.HTML()
+
+                        # --- Side by side BT viz ---
+                        with gr.Row(equal_height=True):
+                            with gr.Column(scale=1):
+                                cmp_card_a = gr.HTML()
+                                cmp_viz_a = gr.HTML(label="BT — Sample A")
+                            with gr.Column(scale=1):
+                                cmp_card_b = gr.HTML()
+                                cmp_viz_b = gr.HTML(label="BT — Sample B")
+
+                        # --- Wire compare ---
+                        _cmp_outputs = [
+                            cmp_card_a,
+                            cmp_viz_a,
+                            cmp_card_b,
+                            cmp_viz_b,
+                            cmp_diff_html,
+                            cmp_diff_xml,
+                        ]
+                        cmp_btn.click(
+                            fn=cmp_load_both,
+                            inputs=[cmp_num_a, cmp_num_b],
+                            outputs=_cmp_outputs,
+                        )
+                        # Also load on number change
+                        cmp_num_a.change(
+                            fn=cmp_load_both,
+                            inputs=[cmp_num_a, cmp_num_b],
+                            outputs=_cmp_outputs,
+                        )
+                        cmp_num_b.change(
+                            fn=cmp_load_both,
+                            inputs=[cmp_num_a, cmp_num_b],
+                            outputs=_cmp_outputs,
+                        )
+                        # Initial load
+                        app.load(
+                            fn=cmp_load_both,
+                            inputs=[cmp_num_a, cmp_num_b],
+                            outputs=_cmp_outputs,
+                        )
 
     return app
 
