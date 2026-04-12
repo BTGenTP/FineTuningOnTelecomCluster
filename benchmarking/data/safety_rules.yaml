@@ -1,0 +1,312 @@
+# NAV4RAIL Safety Rules
+# =====================
+# Formalized constraints derived from:
+#   - finetune/validate_bt.py (L1-L4 validation levels)
+#   - benchmarking/data/real_inspection_mission.xml (reference BT patterns)
+#   - NAV4RAIL operational requirements
+#
+# These rules are enforced at three levels:
+#   1. Prompt injection (system prompt for LLM)
+#   2. Constrained decoding (GBNF grammar)
+#   3. Post-generation validation (validate_bt.py)
+
+rules:
+  # ── Level L1 — Syntactic ──────────────────────────────────────────────────
+  - id: SR-001
+    name: "XML well-formed"
+    description: "The generated output must be valid XML parseable by xml.etree.ElementTree"
+    level: L1
+    enforcement: [validator]
+    blocking: true
+
+  - id: SR-002
+    name: "Root tag present"
+    description: "Top-level tag must be <root>"
+    level: L1
+    enforcement: [validator]
+    blocking: true
+
+  - id: SR-003
+    name: "BTCPP format version"
+    description: "Root element should have BTCPP_format='4' attribute"
+    level: L1
+    enforcement: [validator, grammar]
+    blocking: false  # warning only
+
+  - id: SR-004
+    name: "Valid tags only"
+    description: "All XML tags must be in the valid_tags set from skills_catalog.yaml"
+    level: L1
+    enforcement: [validator, grammar]
+    blocking: true
+
+  - id: SR-005
+    name: "Valid skills only"
+    description: >
+      All skill references (tag names in v4, ID attributes in v5)
+      must be in the 28 known skills. No hallucinated skills allowed.
+    level: L1
+    enforcement: [validator, grammar]
+    blocking: true
+
+  - id: SR-006
+    name: "MoveAndStop required"
+    description: "Every BT must contain at least one MoveAndStop node"
+    level: L1
+    enforcement: [validator, prompt]
+    blocking: true
+
+  # ── Level L2 — Structural ─────────────────────────────────────────────────
+  - id: SR-007
+    name: "BehaviorTree element present"
+    description: "At least one <BehaviorTree> element must exist under <root>"
+    level: L2
+    enforcement: [validator]
+    blocking: true
+
+  - id: SR-008
+    name: "No empty control nodes"
+    description: "Sequence, Fallback, ReactiveFallback, Parallel, Repeat must have children"
+    level: L2
+    enforcement: [validator]
+    blocking: true
+
+  - id: SR-009
+    name: "Maximum tree depth"
+    description: "Tree depth must not exceed 12 levels"
+    level: L2
+    enforcement: [validator]
+    blocking: true
+    parameter: 12
+
+  - id: SR-010
+    name: "Maximum skill count"
+    description: "Total number of skill nodes must not exceed 80"
+    level: L2
+    enforcement: [validator]
+    blocking: true
+    parameter: 80
+
+  - id: SR-011
+    name: "Fallback minimum children"
+    description: "Fallback and ReactiveFallback nodes must have >= 2 children"
+    level: L2
+    enforcement: [validator, grammar]
+    blocking: true
+    parameter: 2
+
+  # ── Level L3 — Semantic ────────────────────────────────────────────────────
+  - id: SR-012
+    name: "LoadMission first"
+    description: >
+      LoadMission must be the first skill executed in the BT.
+      It is the entry point of any mission.
+    level: L3
+    enforcement: [validator, prompt]
+    blocking: false  # warning
+
+  - id: SR-013
+    name: "Skill prerequisites"
+    description: >
+      Skills with prerequisites must appear after their dependencies
+      in a depth-first traversal. See prerequisites map in skills_catalog.yaml.
+    level: L3
+    enforcement: [validator]
+    blocking: false  # warning
+
+  - id: SR-014
+    name: "MoveAndStop final position"
+    description: "MoveAndStop should be among the last skills in execution order"
+    level: L3
+    enforcement: [validator]
+    blocking: false  # warning
+
+  - id: SR-015
+    name: "Conditions inside Fallback"
+    description: >
+      Condition nodes (MissionTerminated, MissionFullyTreated, etc.)
+      used as loop-exit checks must be direct children of a Fallback
+      or ReactiveFallback node, not bare in a Sequence.
+    level: L3
+    enforcement: [validator]
+    blocking: false  # warning
+
+  - id: SR-016
+    name: "Inspection mission coherence"
+    description: >
+      Missions described as inspection must include ManageMeasurements
+      with step types 10-14. Transport-only missions must NOT contain
+      ManageMeasurements.
+    level: L3
+    enforcement: [validator, prompt]
+    blocking: false  # warning
+
+  - id: SR-017
+    name: "Inspection with control requires analysis"
+    description: >
+      When inspection includes control/verification (step types 12, 13, 14),
+      AnalyseMeasurements must be present along with quality validation
+      (MeasurementsQualityValidated or MeasurementsEnforcedValidated).
+    level: L3
+    enforcement: [validator, prompt]
+    blocking: false  # warning
+
+  # ── Level L4 — Port Validation ─────────────────────────────────────────────
+  - id: SR-018
+    name: "Required ports present"
+    description: >
+      Each skill must have all its required ports specified.
+      See port definitions in skills_catalog.yaml.
+    level: L4
+    enforcement: [validator]
+    blocking: false  # warning
+
+  - id: SR-019
+    name: "Port type correctness"
+    description: >
+      Port values must match their declared types:
+        bb_var: must be "{variable_name}" format
+        int_literal: must be a plain integer string
+        float_literal: must be a plain float string
+        string_literal: plain text (no braces)
+    level: L4
+    enforcement: [validator]
+    blocking: false  # warning
+
+  - id: SR-020
+    name: "Port allowed values"
+    description: >
+      Ports with enumerated allowed values must use one of the declared
+      values (e.g., CheckCurrentStepType.type_to_be_checked in [0-4, 10-14],
+      Move.threshold_type in [1, 3]).
+    level: L4
+    enforcement: [validator]
+    blocking: false  # warning
+
+  - id: SR-021
+    name: "SubTreePlus attributes"
+    description: "SubTreePlus must have ID and __autoremap='true' attributes"
+    level: L4
+    enforcement: [validator]
+    blocking: false  # warning
+
+  - id: SR-022
+    name: "Repeat num_cycles"
+    description: "Repeat nodes must have a num_cycles attribute"
+    level: L4
+    enforcement: [validator]
+    blocking: false  # warning
+
+  # ── Level L5 — Advanced Safety (from real_inspection_mission.xml) ──────────
+  - id: SR-023
+    name: "Blackboard chaining (data flow)"
+    description: >
+      RULE 1: No action node (Move, CreatePath, etc.) may be invoked
+      if its blackboard input variables ({motion_params}, {origin}, etc.)
+      have not been explicitly populated by a preceding node
+      (PassMotionParameters, ProjectPointOnNetwork, etc.) in the same
+      Sequence. Validates data flow integrity.
+    level: L5
+    enforcement: [validator]
+    blocking: false  # warning
+    examples:
+      valid: >
+        <Sequence>
+          <PassMotionParameters motion_params="{motion_params}"/>
+          <Move threshold_type="1" motion_params="{motion_params}"/>
+        </Sequence>
+      invalid: >
+        <Sequence>
+          <Move threshold_type="1" motion_params="{motion_params}"/>
+        </Sequence>
+
+  - id: SR-024
+    name: "Inspection movement safety (watchdog)"
+    description: >
+      RULE 2: Any movement node performing inspection
+      (CheckCurrentStepType with type 10, 11, 12, 13, 14) MUST be
+      followed (within the same subtree) by appropriate post-processing:
+        - Types 12, 14: ManageMeasurements(stop) + AnalyseMeasurements
+          + Fallback(MeasurementsQualityValidated, corrective actions)
+          + GenerateCorrectiveSubSequence + InsertCorrectiveSubSequence
+        - Type 13: ManageMeasurements(stop) + Fallback(AnalyseMeasurements,
+          MeasurementsEnforcedValidated)
+        - Types 10, 11: ManageMeasurements(start) before movement
+          (type 10) or no special post-processing (type 11)
+    level: L5
+    enforcement: [validator, prompt]
+    blocking: false  # warning
+    examples:
+      valid_type_12: >
+        <Sequence name="REACH AND STOP INSPECTING">
+          <CheckCurrentStepType type_to_be_checked="12"/>
+          <PassMotionParameters motion_params="{motion_params}"/>
+          <MoveAndStop motion_params="{motion_params}"/>
+          <ManageMeasurements/>
+          <AnalyseMeasurements/>
+          <Fallback>
+            <MeasurementsQualityValidated/>
+            <PassDefectsLocalization defects="{defects}"/>
+          </Fallback>
+          <GenerateCorrectiveSubSequence defects="{defects}"/>
+          <InsertCorrectiveSubSequence/>
+          <UpdateCurrentExecutedStep/>
+        </Sequence>
+
+  - id: SR-025
+    name: "Mission loop safety (state management)"
+    description: >
+      RULE 3: The evaluation loop of mission steps must NEVER be
+      placed in a bare Sequence. It must be isolated inside a
+      Repeat(num_cycles="-1") nested in a ReactiveFallback at a
+      higher level, with MissionTerminated as a sibling condition.
+      This guarantees the robot can escape the loop when the mission
+      is complete.
+    level: L5
+    enforcement: [validator, prompt]
+    blocking: false  # warning
+    pattern: >
+      <ReactiveFallback>
+        <Repeat num_cycles="-1">
+          <Fallback name="MOTION SELECTOR">
+            <!-- SubTreePlus for each step type -->
+          </Fallback>
+        </Repeat>
+        <Condition ID="MissionTerminated"/>
+      </ReactiveFallback>
+
+  - id: SR-026
+    name: "Path calculation loop pattern"
+    description: >
+      Path calculation must use Fallback(Repeat(-1)(Sequence(
+      UpdateCurrentGeneratedActivity, ProjectPointOnNetwork, CreatePath,
+      AgregatePath)), MissionFullyTreated). The Repeat loop generates
+      path segments; MissionFullyTreated terminates via Fallback when done.
+    level: L5
+    enforcement: [prompt]
+    blocking: false
+    pattern: >
+      <Fallback>
+        <Repeat num_cycles="-1">
+          <Sequence>
+            <UpdateCurrentGeneratedActivity .../>
+            <ProjectPointOnNetwork .../>
+            <ProjectPointOnNetwork .../>
+            <CreatePath .../>
+            <AgregatePath .../>
+          </Sequence>
+        </Repeat>
+        <MissionFullyTreated .../>
+      </Fallback>
+
+  - id: SR-027
+    name: "Motion subtree pattern"
+    description: >
+      Each motion subtree must follow the pattern:
+      Sequence(CheckCurrentStepType, PassMotionParameters, [movement],
+      [optional inspection actions], UpdateCurrentExecutedStep).
+      CheckCurrentStepType is always first, UpdateCurrentExecutedStep
+      is always last.
+    level: L5
+    enforcement: [prompt]
+    blocking: false
