@@ -27,7 +27,14 @@ echo "Prompt mode: ${PROMPT_MODE}"
 echo "Adapter:     ${ADAPTER:-<none>}"
 
 # ── Common setup (venv, PYTHONPATH, diagnostics) ────────────────────────────
-source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
+# Slurm executes a copy in /var/spool/slurmd/...; SLURM_SUBMIT_DIR is the dir where sbatch ran.
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -r "${SLURM_SUBMIT_DIR}/scripts/slurm/_common.sh" ]; then
+  # shellcheck source=scripts/slurm/_common.sh
+  source "${SLURM_SUBMIT_DIR}/scripts/slurm/_common.sh"
+else
+  # shellcheck source=scripts/slurm/_common.sh
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
+fi
 
 # ── Run directory ───────────────────────────────────────────────────────────
 RUN_DIR="runs/slurm/nav4rail_eval_${PROMPT_MODE}_${MODEL}_${SLURM_JOB_ID}"

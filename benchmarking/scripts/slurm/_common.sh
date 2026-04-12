@@ -2,15 +2,20 @@
 # ============================================================================
 # _common.sh — Shared SLURM environment setup for all NAV4RAIL jobs
 # ============================================================================
-# Source this file at the top of every SLURM script:
-#   source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
+# Source this file from batch scripts (do not use dirname(BASH_SOURCE) alone: Slurm runs a
+# copy under /var/spool/slurmd/.../slurm_script, so BASH_SOURCE would miss this file):
+#   if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -r "${SLURM_SUBMIT_DIR}/scripts/slurm/_common.sh" ]; then
+#     source "${SLURM_SUBMIT_DIR}/scripts/slurm/_common.sh"
+#   else
+#     source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
+#   fi
 #
 # What it does:
 #   1. cd to benchmarking/ root (reliable cwd regardless of sbatch location)
 #   2. Load CUDA module (for GPU access)
 #   3. Create venv if missing, activate it
 #   4. Clear PYTHONHOME (module load sets it, breaks venvs)
-#   5. Ensure all requirements.txt deps are installed (idempotent)
+#   5. Ensure all requirements.txt deps are installed (idempotent, flock-serialized)
 #   6. Set PYTHONPATH so `python -m src.*` works
 #   7. Print diagnostic info to stdout (captured by SLURM .out)
 # ============================================================================
@@ -40,7 +45,7 @@ if [ ! -d "$VENV_DIR" ]; then
             module load python/3.11.13 2>/dev/null || true
             python3 -m venv "$VENV_DIR"
         fi
-    ) 200>"$VENV_DIR.lock"
+    ) 200>>"$VENV_DIR.lock"
 fi
 
 # ── Activate venv ───────────────────────────────────────────────────────────
@@ -56,14 +61,20 @@ source "$VENV_DIR/bin/activate"
 unset PYTHONHOME 2>/dev/null || true
 
 # ── Ensure all dependencies are installed ───────────────────────────────────
-# This is idempotent: pip checks versions and skips already-satisfied deps.
-# Takes < 2s when everything is already installed.
-# Fixes the case where the venv was created but requirements weren't installed,
-# or where a new dependency was added to requirements.txt.
-pip install --quiet --disable-pip-version-check -r "$BENCH_DIR/requirements.txt" 2>&1 || {
-    echo "[_common.sh] WARNING: pip install failed, retrying with --no-build-isolation..."
-    pip install --quiet --disable-pip-version-check --no-build-isolation -r "$BENCH_DIR/requirements.txt"
-}
+# Serialize pip against VENV_DIR.lock: a shared venv on NFS + concurrent array
+# tasks causes errno 116 (Stale file handle) and half-installed envs → import yaml fails.
+# This is idempotent: pip skips satisfied deps; queued jobs wait on flock.
+(
+    flock -x 200
+    # Avoid "invalid command 'bdist_wheel'" when building sdists from cache.
+    python -m pip install --quiet --disable-pip-version-check wheel setuptools
+    pip install --quiet --disable-pip-version-check -r "$BENCH_DIR/requirements.txt" 2>&1 || {
+        echo "[_common.sh] WARNING: pip install failed, retrying with --no-build-isolation..."
+        pip install --quiet --disable-pip-version-check --no-build-isolation -r "$BENCH_DIR/requirements.txt"
+    }
+    # Cheap sanity check: repair if a previous crashed install left yaml missing.
+    python -c "import yaml" 2>/dev/null || python -m pip install --quiet --disable-pip-version-check "pyyaml>=6.0"
+) 200>>"$VENV_DIR.lock"
 
 # ── PYTHONPATH ──────────────────────────────────────────────────────────────
 export PYTHONPATH="${PYTHONPATH:-}:${BENCH_DIR}"
