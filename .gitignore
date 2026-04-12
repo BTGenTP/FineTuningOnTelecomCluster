@@ -28,3 +28,5 @@ webapp/__pycache__/
 *.tar
 *.tar.bz2
 *.7z
+benchmark/
+*.claude/

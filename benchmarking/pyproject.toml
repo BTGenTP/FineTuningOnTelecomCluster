@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nav4rail-bench"
+version = "0.1.0"
+description = "Benchmarking platform for LLM-based Behavior Tree generation (NAV4RAIL)"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.4.0",
+    "transformers>=4.46.0",
+    "peft>=0.14.0",
+    "trl>=0.14.0",
+    "bitsandbytes>=0.44.0",
+    "datasets>=3.0.0",
+    "accelerate>=1.0.0",
+    "wandb>=0.18.0",
+    "zss>=1.2.0",
+    "lxml>=5.0.0",
+    "seaborn>=0.13.0",
+    "matplotlib>=3.9.0",
+    "pyyaml>=6.0",
+    "omegaconf>=2.3.0",
+]
+
+[project.optional-dependencies]
+inference = ["vllm>=0.6.0", "llama-cpp-python>=0.3.0"]
+retrieval = ["sentence-transformers>=3.0.0"]
+dev = ["pytest>=8.0", "ruff>=0.4.0"]
+
+[project.scripts]
+nav4rail-train = "src.train.unified_trainer:main"
+nav4rail-eval = "src.eval.benchmark:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
