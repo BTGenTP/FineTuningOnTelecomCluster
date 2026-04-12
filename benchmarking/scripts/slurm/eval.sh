@@ -5,6 +5,7 @@
 # Usage:
 #   MODEL=gemma2_9b PROMPT_MODE=zero_shot sbatch scripts/slurm/eval.sh
 #   MODEL=mistral_7b ADAPTER=runs/sft_mistral_7b/final_adapter sbatch scripts/slurm/eval.sh
+#   sbatch --partition=3090 scripts/slurm/eval.sh   # override partition
 
 #SBATCH --job-name=nav4rail_eval
 #SBATCH --partition=P100
@@ -13,40 +14,34 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --time=06:00:00
 #SBATCH --output=runs/slurm/nav4rail_eval_%j/slurm_%j.out
+#SBATCH --error=runs/slurm/nav4rail_eval_%j/slurm_%j.err
 
 MODEL=${MODEL:-mistral_7b}
 CONFIG=${CONFIG:-configs/base.yaml}
 PROMPT_MODE=${PROMPT_MODE:-zero_shot}
 ADAPTER=${ADAPTER:-}
 
+echo "=== NAV4RAIL Evaluation ==="
+echo "Model:       ${MODEL}"
+echo "Prompt mode: ${PROMPT_MODE}"
+echo "Adapter:     ${ADAPTER:-<none>}"
+
+# ── Common setup (venv, PYTHONPATH, diagnostics) ────────────────────────────
+source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
+
+# ── Run directory ───────────────────────────────────────────────────────────
 RUN_DIR="runs/slurm/nav4rail_eval_${PROMPT_MODE}_${MODEL}_${SLURM_JOB_ID}"
 mkdir -p "$RUN_DIR"
 
-module load python/3.11.13 cuda/12.4.1 2>/dev/null || true
-
-# Setup venv (with flock to avoid pip races)
-VENV_DIR="$HOME/.venvs/nav4rail_bench"
-if [ ! -d "$VENV_DIR" ]; then
-    (
-        flock -x 200
-        if [ ! -d "$VENV_DIR" ]; then
-            python -m venv "$VENV_DIR"
-            source "$VENV_DIR/bin/activate"
-            pip install --upgrade pip
-            pip install -r requirements.txt
-        fi
-    ) 200>"$VENV_DIR.lock"
-fi
-source "$VENV_DIR/bin/activate"
-
 export WANDB_PROJECT=nav4rail-bench
-export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 
+# ── Adapter flag ────────────────────────────────────────────────────────────
 ADAPTER_FLAG=""
 if [ -n "$ADAPTER" ]; then
     ADAPTER_FLAG="--adapter $ADAPTER"
 fi
 
+# ── Run benchmark ───────────────────────────────────────────────────────────
 python -m src.eval.benchmark \
     --config "$CONFIG" \
     --model "$MODEL" \
