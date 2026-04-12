@@ -1,0 +1,437 @@
+# NAV4RAIL Skills Catalog — Single Source of Truth
+# =================================================
+# Derived from finetune/validate_bt.py (VALID_SKILLS, SKILL_PORTS, _DEFAULT_PORT_VALUES, PREREQUISITES)
+# and benchmarking/data/real_inspection_mission.xml (reference BT).
+#
+# All pipeline components (validator, grammar, prompt builder, reward function)
+# MUST read from this file — no hardcoded skill lists elsewhere.
+#
+# Source: https://gitlab.com/nav4rail/skills
+
+metadata:
+  version: "1.0"
+  btcpp_format: "4"
+  total_skills: 28  # 27 original + Pause
+  source: "https://gitlab.com/nav4rail/skills"
+  reference_bt: "data/real_inspection_mission.xml"
+
+# ---------------------------------------------------------------------------
+# Families
+# ---------------------------------------------------------------------------
+families:
+  preparation:
+    description: "Mission loading, path planning, and sequence generation"
+    skills:
+      LoadMission:
+        bt_tag: Action
+        ports:
+          mission_file_path:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{mission_file_path}"
+        prerequisites: []
+        description: "Charge le fichier de mission depuis le disque"
+
+      MissionStructureValid:
+        bt_tag: Condition
+        ports: {}
+        prerequisites: [LoadMission]
+        description: "Verifie la structure de la mission chargee"
+
+      UpdateCurrentGeneratedActivity:
+        bt_tag: Action
+        ports:
+          type:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{type}"
+          origin_sph:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{origin_sph}"
+          target_sph:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{target_sph}"
+          forbidden_atoms_out:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{forbidden_atoms}"
+        prerequisites: []
+        description: "Met a jour l'activite courante dans la boucle de generation"
+
+      ProjectPointOnNetwork:
+        bt_tag: Action
+        ports:
+          point_in:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{point_in}"
+          point_out:
+            direction: output
+            type: bb_var
+            required: true
+            default: "{point_out}"
+        prerequisites: [LoadMission]
+        description: "Projette un point spherique sur le reseau ferre"
+
+      CreatePath:
+        bt_tag: Action
+        ports:
+          origin:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{origin}"
+          target:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{target}"
+          forbidden_atoms:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{forbidden_atoms}"
+          path:
+            direction: output
+            type: bb_var
+            required: true
+            default: "{path}"
+        prerequisites: [ProjectPointOnNetwork]
+        description: "Calcule un chemin entre origine et destination"
+
+      AgregatePath:
+        bt_tag: Action
+        ports:
+          path:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{path}"
+        prerequisites: [CreatePath]
+        description: "Agrege le segment de chemin au chemin global"
+
+      MissionFullyTreated:
+        bt_tag: Condition
+        ports:
+          type:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{type}"
+        prerequisites: []
+        description: "Condition vraie quand toutes les activites sont traitees"
+
+      PassAdvancedPath:
+        bt_tag: Action
+        ports:
+          adv_path:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{adv_path}"
+        prerequisites: []
+        description: "Transmet le chemin avance au blackboard"
+
+      PassMission:
+        bt_tag: Action
+        ports:
+          mission:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{mission}"
+        prerequisites: []
+        description: "Transmet la mission au blackboard"
+
+      GenerateMissionSequence:
+        bt_tag: Action
+        ports:
+          mission:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{mission}"
+          mission_sequence:
+            direction: output
+            type: bb_var
+            required: true
+            default: "{mission_sequence}"
+        prerequisites: [LoadMission]
+        description: "Genere la sequence de mouvements a partir de la mission"
+
+      GenerateCorrectiveSubSequence:
+        bt_tag: Action
+        ports:
+          defects:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{defects}"
+        prerequisites: []
+        description: "Genere une sous-sequence corrective a partir des defauts detectes"
+
+      InsertCorrectiveSubSequence:
+        bt_tag: Action
+        ports: {}
+        prerequisites: []
+        description: "Insere la sous-sequence corrective dans la sequence de mission"
+
+  motion:
+    description: "Movement control, step management, and mission execution"
+    skills:
+      MissionTerminated:
+        bt_tag: Condition
+        ports: {}
+        prerequisites: []
+        description: "Condition vraie quand la mission est terminee"
+
+      CheckCurrentStepType:
+        bt_tag: Condition
+        ports:
+          type_to_be_checked:
+            direction: input
+            type: int_literal
+            required: true
+            default: "0"
+            allowed: ["0", "1", "2", "3", "4", "10", "11", "12", "13", "14"]
+        prerequisites: []
+        description: "Verifie si l'etape courante est du type specifie"
+
+      PassMotionParameters:
+        bt_tag: Action
+        ports:
+          motion_params:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{motion_params}"
+        prerequisites: []
+        description: "Transmet les parametres de mouvement au blackboard"
+
+      Move:
+        bt_tag: Action
+        ports:
+          threshold_type:
+            direction: input
+            type: int_literal
+            required: true
+            default: "1"
+            allowed: ["1", "3"]
+          motion_params:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{motion_params}"
+        prerequisites: []
+        description: "Execute un mouvement avec seuil (1=normal, 3=passage)"
+
+      UpdateCurrentExecutedStep:
+        bt_tag: Action
+        ports: {}
+        prerequisites: []
+        description: "Met a jour l'index de l'etape courante apres execution"
+
+      Deccelerate:
+        bt_tag: Action
+        ports:
+          motion_params:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{motion_params}"
+        prerequisites: []
+        description: "Deccelere le robot progressivement"
+
+      MoveAndStop:
+        bt_tag: Action
+        ports:
+          motion_params:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{motion_params}"
+        prerequisites: []
+        description: "Deplace le robot et s'arrete a la destination"
+
+      SignalAndWaitForOrder:
+        bt_tag: Action
+        ports:
+          message:
+            direction: input
+            type: string_literal
+            required: true
+            default: "waiting_for_order"
+        prerequisites: []
+        description: "Signale un message et attend une autorisation operateur"
+
+      IsRobotPoseProjectionActive:
+        bt_tag: Condition
+        ports:
+          adv_path:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{adv_path}"
+          pub_proj:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{pub_proj}"
+        prerequisites: []
+        description: "Verifie que la projection de la pose robot est active"
+
+      Pause:
+        bt_tag: Action
+        ports:
+          duration:
+            direction: input
+            type: float_literal
+            required: true
+            default: "2.0"
+        prerequisites: []
+        description: "Pause le robot pendant la duree specifiee (secondes)"
+
+  inspection:
+    description: "Measurement management, analysis, and quality control"
+    skills:
+      ManageMeasurements:
+        bt_tag: Action
+        ports: {}
+        prerequisites: []
+        description: "Demarre ou arrete les mesures d'inspection"
+
+      AnalyseMeasurements:
+        bt_tag: Action
+        ports: {}
+        prerequisites: [ManageMeasurements]
+        description: "Analyse les mesures acquises pendant l'inspection"
+
+      MeasurementsQualityValidated:
+        bt_tag: Condition
+        ports: {}
+        prerequisites: []
+        description: "Condition vraie si la qualite des mesures est acceptable"
+
+      PassDefectsLocalization:
+        bt_tag: Action
+        ports:
+          defects:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{defects}"
+        prerequisites: []
+        description: "Transmet la localisation des defauts au blackboard"
+
+      MeasurementsEnforcedValidated:
+        bt_tag: Condition
+        ports: {}
+        prerequisites: []
+        description: "Validation forcee des mesures (fallback quand AnalyseMeasurements echoue)"
+
+  simulation:
+    description: "Simulation control"
+    skills:
+      SimulationStarted:
+        bt_tag: Condition
+        ports: {}
+        prerequisites: []
+        description: "Condition vraie si la simulation est active"
+
+# ---------------------------------------------------------------------------
+# Aggregated prerequisites (partial ordering constraints)
+# ---------------------------------------------------------------------------
+prerequisites:
+  MissionStructureValid: [LoadMission]
+  CreatePath: [ProjectPointOnNetwork]
+  AgregatePath: [CreatePath]
+  GenerateMissionSequence: [LoadMission]
+
+# ---------------------------------------------------------------------------
+# Motion step type definitions
+# Maps numeric type codes to subtree IDs and behavior
+# ---------------------------------------------------------------------------
+step_types:
+  transport:
+    - type: 0
+      name: move
+      subtree_id: move
+      description: "Mouvement continu sans arret"
+    - type: 1
+      name: deccelerate
+      subtree_id: deccelerate
+      description: "Decceleration progressive"
+    - type: 2
+      name: reach_and_stop
+      subtree_id: reach_and_stop
+      description: "Atteindre et s'arreter, attendre autorisation"
+    - type: 3
+      name: pass
+      subtree_id: pass
+      description: "Passage (traversee sans arret)"
+    - type: 4
+      name: reach_stop_no_wait
+      subtree_id: reach_stop_and_dont_wait
+      description: "Atteindre et s'arreter sans attendre"
+
+  inspection:
+    - type: 10
+      name: move_and_inspect
+      subtree_id: move_and_inspect
+      requires_analysis: false
+      description: "Mouvement avec demarrage d'inspection"
+    - type: 11
+      name: deccelerate_and_inspect
+      subtree_id: deccelerate_and_inspect
+      requires_analysis: false
+      description: "Decceleration pendant l'inspection"
+    - type: 12
+      name: reach_stop_inspecting
+      subtree_id: reach_and_stop_inspecting
+      requires_analysis: true
+      description: "Arret avec analyse des mesures et correction"
+    - type: 13
+      name: pass_stop_inspecting
+      subtree_id: pass_and_stop_inspecting
+      requires_analysis: true
+      description: "Passage avec arret de l'inspection et validation"
+    - type: 14
+      name: reach_stop_inspect_no_wait
+      subtree_id: reach_stop_inspecting_dont_wait
+      requires_analysis: true
+      description: "Arret inspection sans attente, avec correction"
+
+# ---------------------------------------------------------------------------
+# Structural constraints
+# ---------------------------------------------------------------------------
+control_nodes:
+  - Sequence
+  - Fallback
+  - ReactiveFallback
+  - Parallel
+  - Repeat
+
+valid_tags:
+  - root
+  - BehaviorTree
+  - Action
+  - Condition
+  - SubTreePlus
+  - Sequence
+  - Fallback
+  - ReactiveFallback
+  - Parallel
+  - Repeat
+
+limits:
+  max_depth: 12
+  max_skills: 80
+  min_fallback_children: 2

@@ -1,0 +1,161 @@
+# NAV4RAIL Benchmark — Base Configuration
+# ========================================
+# Shared defaults. Override per model/method via merge.
+# Usage: python -m src.train.unified_trainer --config configs/base.yaml --model mistral_7b --method sft_qlora
+
+experiment:
+  seed: 42
+  wandb_project: "nav4rail-bench"
+  wandb_entity: null  # set to your wandb username/team
+  phase: 0
+
+# ── Model Registry ───────────────────────────────────────────────────────────
+models:
+  llama3_8b:
+    hf_id: "NousResearch/Meta-Llama-3.1-8B-Instruct"
+    response_anchor: "assistant<|end_header_id|>"
+    chat_template: true
+    supports_system: true
+    bf16: true
+    attn_implementation: null
+    default_batch: 1
+    default_grad_accum: 16
+    default_epochs: 10
+
+  mistral_7b:
+    hf_id: "mistralai/Mistral-7B-Instruct-v0.2"
+    response_anchor: "[/INST]"
+    chat_template: false
+    supports_system: false
+    bf16: false
+    attn_implementation: null
+    default_batch: 2
+    default_grad_accum: 8
+    default_epochs: 10
+
+  qwen25_coder_7b:
+    hf_id: "Qwen/Qwen2.5-Coder-7B-Instruct"
+    response_anchor: "assistant"
+    chat_template: true
+    supports_system: true
+    bf16: true
+    attn_implementation: null
+    default_batch: 1
+    default_grad_accum: 16
+    default_epochs: 10
+
+  gemma2_9b:
+    hf_id: "google/gemma-2-9b-it"
+    response_anchor: "model"
+    chat_template: true
+    supports_system: false
+    bf16: true
+    attn_implementation: "sdpa"  # eager OOMs on 24GB
+    default_batch: 1
+    default_grad_accum: 16
+    default_epochs: 10
+
+  qwen25_14b:
+    hf_id: "Qwen/Qwen2.5-14B-Instruct"
+    response_anchor: "assistant"
+    chat_template: true
+    supports_system: true
+    bf16: true
+    attn_implementation: null
+    default_batch: 1
+    default_grad_accum: 16
+    default_epochs: 10
+
+# ── Active Model (override via CLI --model) ──────────────────────────────────
+model:
+  key: "mistral_7b"
+
+# ── Quantization ─────────────────────────────────────────────────────────────
+quantization:
+  load_in_4bit: true
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_compute_dtype: "float16"
+  bnb_4bit_use_double_quant: true
+
+# ── PEFT ─────────────────────────────────────────────────────────────────────
+peft:
+  method: "qlora"  # lora | qlora | dora | oft | none
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  bias: "none"
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+# ── Training ─────────────────────────────────────────────────────────────────
+training:
+  method: "sft"  # sft | dpo | kto | grpo | orpo | ppo | rft
+  epochs: 10
+  batch_size: 1
+  grad_accum: 16
+  lr: 2.0e-4
+  max_seq_len: 8192
+  warmup_ratio: 0.03
+  lr_scheduler: "cosine"
+  optim: "paged_adamw_8bit"
+  weight_decay: 0.01
+  max_grad_norm: 0.3
+  gradient_checkpointing: true
+  eval_strategy: "epoch"
+  save_strategy: "epoch"
+  load_best_model_at_end: true
+  report_to: "wandb"  # wandb | none
+
+# ── Data ─────────────────────────────────────────────────────────────────────
+data:
+  catalog: "data/skills_catalog.yaml"
+  safety_rules: "data/safety_rules.yaml"
+  train_dataset: "data/dataset_sft.jsonl"
+  test_missions: "data/test_missions.json"
+  test_size: 0.05
+
+# ── Evaluation ───────────────────────────────────────────────────────────────
+eval:
+  temperature: 0.0
+  max_new_tokens: 4096
+  top_p: 1.0
+  constrained_decoding: false
+  enrich_ports: true
+
+# ── GRPO-specific (used when training.method == "grpo") ──────────────────────
+grpo:
+  num_generations: 8
+  max_completion_length: 4096
+  temperature: 0.8
+  beta: 0.1
+  num_train_epochs: 3
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 5.0e-6
+
+# ── DPO-specific ─────────────────────────────────────────────────────────────
+dpo:
+  beta: 0.1
+  loss_type: "sigmoid"
+
+# ── KTO-specific ─────────────────────────────────────────────────────────────
+kto:
+  beta: 0.1
+  desirable_weight: 1.0
+  undesirable_weight: 1.0
+
+# ── Reward components (for GRPO/PPO) ─────────────────────────────────────────
+reward:
+  type: "validate_bt"
+  components:
+    parse_weight: 0.3
+    structure_weight: 0.2
+    semantic_weight: 0.2
+    coherence_weight: 0.2
+    hallucination_weight: 0.1
