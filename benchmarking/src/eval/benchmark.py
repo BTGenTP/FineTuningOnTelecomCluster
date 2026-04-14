@@ -109,7 +109,14 @@ def run_benchmark(
         prompt_mode = "zero_shot"  # Default for trained models
 
     # Load test missions
-    test_path = cfg["data"]["test_missions"]
+    test_path = Path(cfg["data"]["test_missions"])
+    if not test_path.is_file():
+        raise FileNotFoundError(
+            f"Test missions file missing: {test_path}\n"
+            "Generate the fixed eval set with:\n"
+            "  python -m src.data.generate_sft_dataset "
+            "--output data/test_missions.json --n 100 --seed 42"
+        )
     with open(test_path, encoding="utf-8") as f:
         test_missions = json.load(f)
 

@@ -5,19 +5,20 @@
 # Runs the same method on all 5 models in parallel.
 # Usage:
 #   METHOD=sft PROMPT_MODE=zero_shot sbatch scripts/slurm/array_models.sh
-#   sbatch --partition=3090 scripts/slurm/array_models.sh
+#   sbatch --partition=P100 scripts/slurm/array_models.sh  # 7B models only
 
 #SBATCH --job-name=nav4rail_array
-#SBATCH --partition=P100
+#SBATCH --partition=3090
 #SBATCH --gres=gpu:1
-#SBATCH --mem=32G
+#SBATCH --mem=48G
 #SBATCH --cpus-per-task=4
 #SBATCH --time=08:00:00
 #SBATCH --array=0-4
 #SBATCH --output=runs/slurm/nav4rail_array_%A_%a/slurm_%A_%a.out
 #SBATCH --error=runs/slurm/nav4rail_array_%A_%a/slurm_%A_%a.err
 
-MODELS=("mistral_7b" "llama3_8b" "qwen25_coder_7b" "gemma2_9b" "qwen25_14b")
+# MODELS=("mistral_7b" "llama3_8b" "qwen25_coder_7b" "gemma2_9b" "qwen25_14b")
+MODELS=("mistral_7b" "llama3_8b" "qwen25_coder_7b" "gemma2_9b")
 MODEL=${MODELS[$SLURM_ARRAY_TASK_ID]}
 METHOD=${METHOD:-zero_shot}
 PROMPT_MODE=${PROMPT_MODE:-$METHOD}

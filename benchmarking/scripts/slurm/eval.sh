@@ -5,10 +5,10 @@
 # Usage:
 #   MODEL=gemma2_9b PROMPT_MODE=zero_shot sbatch scripts/slurm/eval.sh
 #   MODEL=mistral_7b ADAPTER=runs/sft_mistral_7b/final_adapter sbatch scripts/slurm/eval.sh
-#   sbatch --partition=3090 scripts/slurm/eval.sh   # override partition
+#   sbatch --partition=P100 scripts/slurm/eval.sh   # 7B models only
 
 #SBATCH --job-name=nav4rail_eval
-#SBATCH --partition=P100
+#SBATCH --partition=3090
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=4
