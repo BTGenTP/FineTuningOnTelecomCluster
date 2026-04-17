@@ -6,7 +6,7 @@
 experiment:
   seed: 42
   wandb_project: "nav4rail-bench"
-  wandb_entity: null  # set to your wandb username/team
+  wandb_entity: mouradlatoundji-t-l-com-paris  # set to your wandb username/team
   phase: 0
 
 # ── Compute backends ────────────────────────────────────────────────────────
@@ -156,6 +156,8 @@ eval:
   top_p: 1.0
   constrained_decoding: false
   enrich_ports: true
+  report_to: "wandb"  # wandb | none — track inference runs (zero_shot, few_shot, adapter eval)
+  auto_eval: true     # run benchmark automatically after training
 
 # ── GRPO-specific (used when training.method == "grpo") ──────────────────────
 grpo:

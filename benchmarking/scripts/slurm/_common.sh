@@ -82,6 +82,21 @@ if [ -z "${HF_TOKEN:-}" ]; then
     echo "  Fix: huggingface-cli login   (run once on the cluster login node)"
 fi
 
+# ── Weights & Biases key (track training AND inference runs) ────────────────
+if [ -z "${WANDB_API_KEY:-}" ] && [ -f "$HOME/.netrc" ]; then
+    # `wandb login` writes the key to ~/.netrc under machine api.wandb.ai
+    _wandb_key=$(awk '/machine api.wandb.ai/{f=1} f && /password/{print $2; exit}' "$HOME/.netrc" 2>/dev/null || true)
+    if [ -n "$_wandb_key" ]; then
+        export WANDB_API_KEY="$_wandb_key"
+    fi
+    unset _wandb_key
+fi
+if [ -z "${WANDB_API_KEY:-}" ]; then
+    echo "[_common.sh] WARNING: WANDB_API_KEY not set — W&B tracking will be disabled."
+    echo "  Fix: wandb login   (run once on the cluster login node)"
+fi
+export WANDB_PROJECT="${WANDB_PROJECT:-nav4rail-bench}"
+
 # ── Ensure all dependencies are installed ───────────────────────────────────
 # Serialize pip against VENV_DIR.lock: a shared venv on NFS + concurrent array
 # tasks causes errno 116 (Stale file handle) and half-installed envs → import yaml fails.

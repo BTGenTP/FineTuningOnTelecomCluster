@@ -1,2 +1,4 @@
 !data/test_missions.json
 runs/slurm/
+runs/vastai/
+.env

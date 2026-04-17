@@ -13,12 +13,75 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def _init_wandb_for_eval(cfg: dict, adapter_path: str | None) -> tuple[Any, bool]:
+    """
+    Initialize W&B for an evaluation run.
+
+    Returns (wandb_module_or_None, owned_by_us).
+    `owned_by_us` is True iff we called wandb.init() here and should wandb.finish().
+    Reuses an existing run if one is active (e.g. called from unified_trainer after training).
+    """
+    eval_cfg = cfg.get("eval", {})
+    train_cfg = cfg.get("training", {})
+    report_to = eval_cfg.get("report_to", train_cfg.get("report_to", "none"))
+    if report_to != "wandb":
+        return None, False
+
+    try:
+        import wandb
+    except ImportError:
+        logger.warning("wandb not installed — skipping inference tracking")
+        return None, False
+
+    # Already inside an active run (e.g. training just called us): reuse it.
+    if wandb.run is not None:
+        return wandb, False
+
+    model_key = cfg.get("model", {}).get("key", "unknown")
+    method = train_cfg.get("method", "zero_shot")
+    prompt_mode = (
+        method if method in ("zero_shot", "few_shot", "schema_guided", "chain_of_thought")
+        else "zero_shot"
+    )
+    peft_method = cfg.get("peft", {}).get("method", "none")
+    phase = cfg.get("experiment", {}).get("phase", "?")
+    project = cfg.get("experiment", {}).get("wandb_project", "nav4rail-bench")
+    entity = cfg.get("experiment", {}).get("wandb_entity")
+
+    run_kind = "eval_adapter" if adapter_path else f"eval_{prompt_mode}"
+    run_name = f"{run_kind}_{model_key}"
+    tags = ["eval", model_key, prompt_mode, peft_method, f"phase_{phase}"]
+    if adapter_path:
+        tags.append("adapter")
+
+    try:
+        wandb.init(
+            project=project,
+            entity=entity,
+            name=run_name,
+            tags=tags,
+            group=os.environ.get("WANDB_RUN_GROUP") or f"eval_{method}",
+            job_type="inference",
+            config={
+                **cfg,
+                "adapter_path": adapter_path,
+                "prompt_mode": prompt_mode,
+            },
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("wandb.init failed (%s) — continuing without tracking", e)
+        return None, False
+
+    return wandb, True
 
 
 def _generate_xml(
@@ -122,6 +185,9 @@ def run_benchmark(
 
     logger.info(f"Running benchmark on {len(test_missions)} missions...")
 
+    # ── W&B tracking (reuses active run if called from trainer) ──────────────
+    wandb_mod, wandb_owned = _init_wandb_for_eval(cfg, adapter_path)
+
     all_metrics = []
     detailed_results = []
 
@@ -163,6 +229,18 @@ def run_benchmark(
             "xml": xml_str,
             **asdict(metrics),
         })
+
+        # Stream per-sample metrics to W&B (lightweight: no raw XML to avoid cost)
+        if wandb_mod is not None:
+            m_dict = asdict(metrics)
+            wandb_mod.log({
+                "eval/step": i,
+                "eval/score": m_dict.get("score", 0.0),
+                "eval/valid": int(bool(m_dict.get("valid", False))),
+                "eval/latency_s": m_dict.get("latency_s", 0.0),
+                "eval/n_tokens": m_dict.get("n_tokens", 0),
+                f"eval/by_cat/{category}/score": m_dict.get("score", 0.0),
+            })
 
         if (i + 1) % 10 == 0:
             logger.info(f"  [{i + 1}/{len(test_missions)}] score={metrics.score:.2f}")
@@ -211,6 +289,43 @@ def run_benchmark(
     logger.info(f"  Validity: {summary['xml_validity_rate']:.1%}")
     logger.info(f"  Mean score: {summary['mean_score']:.3f}")
     logger.info(f"  Perfect rate: {summary['perfect_score_rate']:.1%}")
+
+    # ── W&B: log summary + artifacts ─────────────────────────────────────────
+    if wandb_mod is not None:
+        flat_summary = {
+            "eval_summary/xml_validity_rate": summary.get("xml_validity_rate", 0.0),
+            "eval_summary/mean_score": summary.get("mean_score", 0.0),
+            "eval_summary/perfect_score_rate": summary.get("perfect_score_rate", 0.0),
+            "eval_summary/n_missions": len(test_missions),
+        }
+        for cat, stats in summary.get("per_category", {}).items():
+            flat_summary[f"eval_summary/per_cat/{cat}/mean_score"] = stats["mean_score"]
+            flat_summary[f"eval_summary/per_cat/{cat}/validity_rate"] = stats["validity_rate"]
+            flat_summary[f"eval_summary/per_cat/{cat}/n"] = stats["n"]
+
+        for k, v in flat_summary.items():
+            wandb_mod.run.summary[k] = v
+        wandb_mod.log(flat_summary)
+
+        # Upload detailed results as artifact
+        try:
+            artifact = wandb_mod.Artifact(
+                name=f"eval-results-{summary['model_key']}-{int(time.time())}",
+                type="eval-results",
+                metadata={
+                    "model_key": summary["model_key"],
+                    "training_method": summary["training_method"],
+                    "adapter_path": summary["adapter_path"],
+                },
+            )
+            artifact.add_file(str(out_path / "metrics.json"))
+            artifact.add_file(str(out_path / "results_detail.json"))
+            wandb_mod.log_artifact(artifact)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to upload W&B artifact: %s", e)
+
+        if wandb_owned:
+            wandb_mod.finish()
 
     return summary
 

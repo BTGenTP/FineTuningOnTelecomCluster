@@ -44,20 +44,26 @@ def train(cfg: dict) -> dict[str, Any]:
 
     # Setup wandb
     wandb_project = cfg.get("experiment", {}).get("wandb_project", "nav4rail-bench")
+    wandb_entity = cfg.get("experiment", {}).get("wandb_entity")
     model_key = cfg.get("model", {}).get("key", "unknown")
     peft_method = cfg.get("peft", {}).get("method", "qlora")
     phase = cfg.get("experiment", {}).get("phase", "?")
 
+    wandb_mod = None
     if cfg.get("training", {}).get("report_to") == "wandb":
         try:
             import wandb
 
             wandb.init(
                 project=wandb_project,
+                entity=wandb_entity,
                 config=cfg,
                 name=f"{method}_{model_key}_{peft_method}",
                 tags=[method, model_key, peft_method, f"phase_{phase}"],
+                group=os.environ.get("WANDB_RUN_GROUP") or f"train_{method}",
+                job_type="training",
             )
+            wandb_mod = wandb
         except ImportError:
             logger.warning("wandb not installed, skipping tracking")
 
@@ -66,7 +72,8 @@ def train(cfg: dict) -> dict[str, Any]:
     trainer = TrainerClass(cfg)
     result = trainer.train()
 
-    # Auto-evaluate after training
+    # Auto-evaluate after training — benchmark.py detects the active wandb run
+    # and logs eval/* metrics under the same run instead of starting a new one.
     auto_eval = cfg.get("eval", {}).get("auto_eval", True)
     if auto_eval:
         logger.info("Running automatic post-training evaluation...")
@@ -76,6 +83,9 @@ def train(cfg: dict) -> dict[str, Any]:
             run_benchmark(cfg)
         except Exception as e:
             logger.error(f"Auto-eval failed: {e}")
+
+    if wandb_mod is not None:
+        wandb_mod.finish()
 
     return result
 
