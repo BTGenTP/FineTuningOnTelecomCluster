@@ -112,17 +112,53 @@ find_offer() {
     local gpu_ram="$1"
     local exclude="${2:-}"
     local query="gpu_ram>=${gpu_ram} num_gpus=1 ${EXTRA_QUERY}"
+    local raw
 
-    vastai search offers "$query" --order dph --raw 2>/dev/null | python3 - "$exclude" <<'PY'
-import json, sys
+    # Avoid `vastai | python` under pipefail: a failed search would abort the whole
+    # script silently (stderr was discarded) when assigning offer_id=$(find_offer …).
+    if ! raw=$(vastai search offers "$query" --order dph --raw 2>/dev/null); then
+        echo "  ERROR: vastai search failed — check API key (vastai set api-key) and network." >&2
+        return 0
+    fi
+
+    # Do not use `echo "$raw" | python3 - <<'PY'`: stdin is the heredoc (the script), not the
+    # pipe — nothing reads the JSON, the pipe fills, echo gets SIGPIPE → pipefail aborts the launcher.
+    local tmp
+    tmp=$(mktemp "${ONSTART_TMPDIR}/offers.XXXXXX") || return 0
+    printf '%s' "$raw" >"$tmp"
+    python3 - "$exclude" "$tmp" <<'PY'
+import json, sys, os
+
 exclude = set(sys.argv[1].split()) if len(sys.argv) > 1 and sys.argv[1] else set()
+path = sys.argv[2]
 try:
-    offers = json.loads(sys.stdin.read())
-except json.JSONDecodeError:
+    with open(path, encoding="utf-8") as f:
+        data = json.loads(f.read())
+except (json.JSONDecodeError, OSError):
     sys.exit(0)
+finally:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+if isinstance(data, list):
+    offers = data
+elif isinstance(data, dict):
+    offers = data.get("offers") or data.get("results") or []
+    if not isinstance(offers, list):
+        offers = []
+else:
+    offers = []
+
 for offer in offers:
-    if str(offer.get("id")) not in exclude:
-        print(offer["id"])
+    if not isinstance(offer, dict):
+        continue
+    oid = offer.get("id")
+    if oid is None:
+        continue
+    if str(oid) not in exclude:
+        print(oid)
         break
 PY
 }
@@ -271,7 +307,8 @@ if [ "${#LAUNCHED[@]}" -gt 0 ]; then
     cat <<EOF
 
 Monitor:   vastai show instances
-Logs:      vastai logs <instance_id>
+Logs:      vastai logs <instance_id>   (only after Status is running — during "loading" Docker has no container yet)
+SSH:       vastai ssh <instance_id>    (then: tail -f /workspace/onstart.log)
 Download:  vastai scp <instance_id>:/workspace/results_<model>.tar.gz ./runs/vastai/
 Destroy:   vastai destroy instance <instance_id>
 All at once:

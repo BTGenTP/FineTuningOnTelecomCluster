@@ -143,7 +143,7 @@ def run_benchmark(
     Returns:
         Aggregated metrics dict
     """
-    from src.data.prompt_builder import build_prompt
+    from src.data.prompt_builder import build_prompt, build_system_prompt
     from src.data.skills_loader import SafetyRulesLoader, SkillsCatalog
     from src.eval.metrics import aggregate_metrics, compute_all_metrics
     from src.eval.validate_bt import enrich_ports
@@ -275,6 +275,9 @@ def run_benchmark(
 
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
+
+    with open(out_path / "system_prompt.txt", "w", encoding="utf-8") as f:
+        f.write(build_system_prompt(safety_rules=safety_rules).rstrip() + "\n")
 
     with open(out_path / "metrics.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)

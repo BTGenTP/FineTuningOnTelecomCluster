@@ -157,6 +157,18 @@ FEW_SHOT_EXAMPLES = [
 ]
 
 
+def build_system_prompt(safety_rules: SafetyRulesLoader | None = None) -> str:
+    """
+    Build the final system prompt string actually used at inference time.
+    This is also saved alongside benchmark runs for reproducibility.
+    """
+
+    system_content = SYSTEM_PROMPT
+    if safety_rules:
+        system_content += "\n\n" + safety_rules.summarize_for_prompt()
+    return system_content
+
+
 # ── Chain-of-Thought Template ────────────────────────────────────────────────
 
 COT_TEMPLATE = """\
@@ -203,21 +215,13 @@ def build_prompt(
     use_chat = model_config.get("chat_template", True)
     supports_system = model_config.get("supports_system", True)
 
-    system_content = SYSTEM_PROMPT
-
-    # Add safety rules to system prompt
-    if safety_rules:
-        system_content += "\n\n" + safety_rules.summarize_for_prompt()
+    system_content = build_system_prompt(safety_rules=safety_rules)
 
     if mode == "zero_shot":
         user_content = f"Mission : {mission}"
 
     elif mode == "few_shot":
         examples = FEW_SHOT_EXAMPLES[:k_examples]
-        example_parts = []
-        for ex in examples:
-            example_parts.append(f"Mission : {ex['mission']}\n\n{ex['xml']}")
-        user_content = "\n\n---\n\n".join(example_parts) + f"\n\n---\n\nMission : {mission}"
 
     elif mode == "schema_guided":
         if catalog:
@@ -237,7 +241,29 @@ def build_prompt(
 
     # Format based on model type
     if use_chat:
-        messages = []
+        messages: list[dict[str, str]] = []
+
+        if mode == "few_shot":
+            if supports_system:
+                messages.append({"role": "system", "content": system_content})
+                prefix = ""
+            else:
+                # Models without a system role (e.g. Gemma): prepend once to the first user turn.
+                prefix = system_content + "\n\n"
+
+            for j, ex in enumerate(examples):
+                user_turn = f"Mission : {ex['mission']}"
+                if j == 0 and prefix:
+                    user_turn = prefix + user_turn
+                messages.append({"role": "user", "content": user_turn})
+                messages.append({"role": "assistant", "content": ex["xml"]})
+
+            final_user = f"Mission : {mission}"
+            if not examples and prefix:
+                final_user = prefix + final_user
+            messages.append({"role": "user", "content": final_user})
+            return messages
+
         if supports_system:
             messages.append({"role": "system", "content": system_content})
             messages.append({"role": "user", "content": user_content})
@@ -247,6 +273,20 @@ def build_prompt(
         return messages
     else:
         # Mistral [INST]...[/INST] format
+        if mode == "few_shot":
+            turns: list[str] = []
+            for j, ex in enumerate(examples):
+                user_turn = f"Mission : {ex['mission']}"
+                if j == 0:
+                    user_turn = system_content + "\n\n" + user_turn
+                turns.append(f"<s>[INST] {user_turn} [/INST] {ex['xml']} </s>")
+
+            final_user = f"Mission : {mission}"
+            if not examples:
+                final_user = system_content + "\n\n" + final_user
+            turns.append(f"<s>[INST] {final_user} [/INST]")
+            return "\n".join(turns)
+
         return f"[INST] {system_content}\n\n{user_content} [/INST]"
 
 
