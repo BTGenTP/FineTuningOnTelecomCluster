@@ -112,7 +112,8 @@ PY
 find_offer() {
     local gpu_ram="$1"
     local exclude="${2:-}"
-    local query="gpu_ram>=${gpu_ram} num_gpus=1 ${EXTRA_QUERY}"
+    # compute_cap>=750 → CC 7.5+ (Turing+). PyTorch 2.4+cu12 in IMAGE does not support Pascal (P40 sm_61).
+    local query="gpu_ram>=${gpu_ram} num_gpus=1 compute_cap>=750 ${EXTRA_QUERY}"
     local raw
 
     # Avoid `vastai | python` under pipefail: a failed search would abort the whole
