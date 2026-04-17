@@ -13,6 +13,7 @@
 #   ./scripts/vastai_run.sh --method sft --model qwen25_14b
 #   ./scripts/vastai_run.sh --gpu-ram 48 --query "gpu_name=RTX_4090"
 #   ./scripts/vastai_run.sh --dry-run                    # show search, no launch
+#   GITHUB_TOKEN=ghp_xxx ...                             # private GitHub over HTTPS (optional)
 # ============================================================================
 
 set -euo pipefail
@@ -32,7 +33,7 @@ MODEL="${MODEL:-}"          # empty = all models
 DISK="${DISK:-60}"
 IMAGE="${IMAGE:-pytorch/pytorch:2.4.1-cuda12.4-cudnn9-devel}"
 DRY_RUN="${DRY_RUN:-0}"
-GIT_REPO="${GIT_REPO:-https://github.com/MMyster/FineTuningOnTelecomCluster.git}"
+GIT_REPO="${GIT_REPO:-https://github.com/BTGenTP/FineTuningOnTelecomCluster.git}"
 GIT_BRANCH="${GIT_BRANCH:-main}"
 EXTRA_QUERY="${EXTRA_QUERY:-reliability>0.95 dph<=1.0 inet_down>200}"
 
@@ -183,8 +184,14 @@ echo "Date:        \$(date)"
 echo "GPU:         \$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader)"
 
 cd /workspace
+export GIT_TERMINAL_PROMPT=0
+REPO="${GIT_REPO}"
+CLONE_URL="\$REPO"
+if [ -n "\${GITHUB_TOKEN:-}" ] && [[ "\$REPO" == https://github.com/* ]]; then
+  CLONE_URL="https://x-access-token:\${GITHUB_TOKEN}@github.com/\${REPO#https://github.com/}"
+fi
 if [ ! -d repo ]; then
-    git clone --depth=1 --branch "${GIT_BRANCH}" "${GIT_REPO}" repo
+  git clone --depth=1 --branch "${GIT_BRANCH}" "\$CLONE_URL" repo
 fi
 cd repo/benchmarking
 
@@ -222,6 +229,7 @@ echo "Method:    ${METHOD}"
 echo "Image:     ${IMAGE}"
 echo "Disk:      ${DISK} GB"
 echo "Extra:     ${EXTRA_QUERY}"
+echo "Git:       ${GIT_REPO} (branch ${GIT_BRANCH})"
 echo "Log:       ${INSTANCES_LOG}"
 echo ""
 
@@ -251,6 +259,9 @@ for model in "${MODELS[@]}"; do
     fi
 
     env_str="-e HF_TOKEN=${HF_TOKEN} -e WANDB_API_KEY=${WANDB_API_KEY:-} -e WANDB_PROJECT=nav4rail-bench"
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        env_str="${env_str} -e GITHUB_TOKEN=${GITHUB_TOKEN}"
+    fi
 
     create_json=$(vastai create instance "$offer_id" \
         --image "$IMAGE" \
@@ -308,7 +319,9 @@ if [ "${#LAUNCHED[@]}" -gt 0 ]; then
 
 Monitor:   vastai show instances
 Logs:      vastai logs <instance_id>   (only after Status is running — during "loading" Docker has no container yet)
-SSH:       vastai ssh <instance_id>    (then: tail -f /workspace/onstart.log)
+SSH:       vastai attach ssh <instance_id> ~/.ssh/id_ed25519.pub   # or: $(cat ~/.ssh/id_rsa.pub)
+           vastai ssh-url <instance_id>   # prints ssh://… then: ssh -i ~/.ssh/id_ed25519 -p PORT root@HOST
+           tail -f /workspace/onstart.log
 Download:  vastai scp <instance_id>:/workspace/results_<model>.tar.gz ./runs/vastai/
 Destroy:   vastai destroy instance <instance_id>
 All at once:
