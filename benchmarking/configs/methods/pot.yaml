@@ -1,0 +1,22 @@
+# Program-of-Thoughts (one-shot Code-as-Reasoning)
+# ==================================================
+# Invoke with: python -m src.eval.benchmark --config configs/base.yaml --prompt-mode pot
+# or via the unified trainer:  --method pot (benchmark-only, no training)
+#
+# The LLM emits a Python script against MissionBuilder in a single turn.
+# The sandbox executes it and captures the XML. No retry loop.
+
+training:
+  method: "pot"
+
+# Tight timeouts — the sandbox should never hang a mission.
+pot:
+  temperature: 0.2
+  top_p: 0.9
+  max_new_tokens: 2048
+  sandbox_timeout_s: 10.0
+
+eval:
+  # Agent already returns structured XML; port enrichment still useful when
+  # the LLM skipped optional ports.
+  enrich_ports: true

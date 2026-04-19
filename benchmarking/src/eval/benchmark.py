@@ -49,7 +49,10 @@ def _init_wandb_for_eval(cfg: dict, adapter_path: str | None) -> tuple[Any, bool
     model_key = cfg.get("model", {}).get("key", "unknown")
     method = train_cfg.get("method", "zero_shot")
     prompt_mode = (
-        method if method in ("zero_shot", "few_shot", "schema_guided", "chain_of_thought")
+        method if method in (
+            "zero_shot", "few_shot", "schema_guided", "chain_of_thought",
+            "pot", "react_agent",
+        )
         else "zero_shot"
     )
     peft_method = cfg.get("peft", {}).get("method", "none")
@@ -166,10 +169,38 @@ def run_benchmark(
 
     # Determine prompt mode
     training_method = cfg.get("training", {}).get("method", "sft")
-    if training_method in ("zero_shot", "few_shot", "schema_guided", "chain_of_thought"):
+    if training_method in (
+        "zero_shot", "few_shot", "schema_guided", "chain_of_thought",
+        "pot", "react_agent",
+    ):
         prompt_mode = training_method
     else:
         prompt_mode = "zero_shot"  # Default for trained models
+
+    # ── Code-as-Reasoning agents (single construction, reused per mission) ──
+    agent = None
+    if training_method == "pot":
+        from src.agents.pot_agent import PoTAgent
+
+        agent = PoTAgent(
+            model=model,
+            tokenizer=tokenizer,
+            model_config=model_config,
+            pot_cfg=cfg.get("pot", {}),
+            catalog=catalog,
+            safety_rules=safety_rules,
+        )
+    elif training_method == "react_agent":
+        from src.agents.react_agent import ReActAgent
+
+        agent = ReActAgent(
+            model=model,
+            tokenizer=tokenizer,
+            model_config=model_config,
+            react_cfg=cfg.get("react_agent", {}),
+            catalog=catalog,
+            safety_rules=safety_rules,
+        )
 
     # Load test missions
     test_path = Path(cfg["data"]["test_missions"])
@@ -196,17 +227,34 @@ def run_benchmark(
         category = mission_data["category"]
         mission_id = mission_data["id"]
 
-        # Build prompt
-        prompt = build_prompt(
-            mode=prompt_mode,
-            mission=mission_text,
-            model_config=model_config,
-            catalog=catalog,
-            safety_rules=safety_rules,
-        )
+        agent_meta: dict[str, Any] = {}
 
-        # Generate
-        xml_str, latency_s, n_tokens = _generate_xml(model, tokenizer, prompt, eval_cfg)
+        if agent is not None:
+            agent_result = agent.run(mission_text)
+            xml_str = agent_result.xml
+            latency_s = agent_result.total_latency_s
+            n_tokens = agent_result.n_tokens
+            agent_meta = {
+                "agent_success": agent_result.success,
+                "agent_code": agent_result.code,
+                "agent_n_iterations": agent_result.n_iterations,
+                "agent_llm_latency_s": agent_result.llm_latency_s,
+                "agent_sandbox_latency_s": agent_result.sandbox_latency_s,
+                "agent_error_type": agent_result.error_type,
+                "agent_error_message": agent_result.error_message,
+            }
+        else:
+            # Build prompt
+            prompt = build_prompt(
+                mode=prompt_mode,
+                mission=mission_text,
+                model_config=model_config,
+                catalog=catalog,
+                safety_rules=safety_rules,
+            )
+
+            # Generate
+            xml_str, latency_s, n_tokens = _generate_xml(model, tokenizer, prompt, eval_cfg)
 
         # Optionally enrich ports
         if eval_cfg.get("enrich_ports", True):
@@ -228,19 +276,27 @@ def run_benchmark(
             "category": category,
             "xml": xml_str,
             **asdict(metrics),
+            **agent_meta,
         })
 
         # Stream per-sample metrics to W&B (lightweight: no raw XML to avoid cost)
         if wandb_mod is not None:
             m_dict = asdict(metrics)
-            wandb_mod.log({
+            log_entry = {
                 "eval/step": i,
                 "eval/score": m_dict.get("score", 0.0),
                 "eval/valid": int(bool(m_dict.get("valid", False))),
                 "eval/latency_s": m_dict.get("latency_s", 0.0),
                 "eval/n_tokens": m_dict.get("n_tokens", 0),
                 f"eval/by_cat/{category}/score": m_dict.get("score", 0.0),
-            })
+            }
+            if agent_meta:
+                log_entry["eval/agent_iterations"] = agent_meta.get("agent_n_iterations", 0)
+                log_entry["eval/agent_llm_latency_s"] = agent_meta.get("agent_llm_latency_s", 0.0)
+                log_entry["eval/agent_sandbox_latency_s"] = agent_meta.get(
+                    "agent_sandbox_latency_s", 0.0
+                )
+            wandb_mod.log(log_entry)
 
         if (i + 1) % 10 == 0:
             logger.info(f"  [{i + 1}/{len(test_missions)}] score={metrics.score:.2f}")
@@ -340,14 +396,19 @@ def main():
     parser.add_argument("--adapter", default=None, help="Path to PEFT adapter")
     parser.add_argument("--output", default=None, help="Output directory")
     parser.add_argument("--prompt-mode", default=None,
-                        choices=["zero_shot", "few_shot", "schema_guided", "chain_of_thought"])
+                        choices=["zero_shot", "few_shot", "schema_guided", "chain_of_thought",
+                                 "pot", "react_agent"])
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     from src.utils.config import load_config
 
-    cfg = load_config(args.config, model=args.model)
+    # For agent methods (pot, react_agent) we pass `method=` so that
+    # `configs/methods/<method>.yaml` is merged on top of the base config,
+    # bringing in any per-method tuning knobs.
+    method_override = args.prompt_mode if args.prompt_mode in ("pot", "react_agent") else None
+    cfg = load_config(args.config, model=args.model, method=method_override)
     if args.prompt_mode:
         cfg.setdefault("training", {})["method"] = args.prompt_mode
 

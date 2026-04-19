@@ -190,3 +190,24 @@ reward:
     semantic_weight: 0.2
     coherence_weight: 0.2
     hallucination_weight: 0.1
+
+# ── Program-of-Thoughts (Code-as-Reasoning, one-shot) ───────────────────────
+# Used when training.method == "pot". The LLM generates a Python script that
+# uses the MissionBuilder API; the sandbox executes it and captures the XML.
+pot:
+  temperature: 0.2
+  top_p: 0.9
+  max_new_tokens: 2048
+  sandbox_timeout_s: 10.0
+
+# ── ReAct / Reflexion agent (Code-as-Reasoning, iterative) ──────────────────
+# Used when training.method == "react_agent". Iterates generate → execute →
+# validate → reflect until the target score is reached or max_iterations.
+react_agent:
+  temperature: 0.3
+  top_p: 0.9
+  max_new_tokens: 2048
+  sandbox_timeout_s: 10.0
+  max_iterations: 3
+  target_score: 1.0
+  use_langgraph: true   # falls back to a plain Python loop if LangGraph is missing

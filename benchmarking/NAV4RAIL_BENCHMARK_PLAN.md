@@ -168,6 +168,86 @@ Générer N complétions par prompt avec le modèle SFT, ne garder que celles av
 ### Constitutional AI / RLAIF
 Utiliser un LLM pour générer le feedback au lieu d'humains. Le LLM évalue si le BT respecte des "principes constitutionnels" (sécurité ferroviaire, conformité BTCPP v4, etc.).
 
+## 1.7 Code-as-Reasoning (PoT / ReAct) — approche agentique
+
+**Motivation.** Plutôt que de demander au LLM de produire directement un XML volumineux (contenant 28+ skills aux ports stricts, 27 règles de sécurité et des patterns structurels SR-023..SR-027), on inverse la flèche : le LLM écrit un **script Python** qui appelle une API `MissionBuilder` contrainte. L'interpréteur fait respecter L1/L2/L3 par construction, le sandbox exécute le script, et le stdout (ou la variable `xml`) devient le BT généré. Inspiré de **Program-of-Thoughts / PAL** (Chen et al., 2022) et **ViperGPT** (Surís et al., 2023), avec un complément **ReAct/Reflexion** (Yao et al., 2023 ; Shinn et al., 2023) pour la boucle de correction.
+
+### 1.7.a Program-of-Thoughts (PoT) — one-shot
+
+Un seul appel LLM. Le prompt injecte les docs API (générées dynamiquement depuis le catalog), la mission, et demande un bloc ```python ... ```. Le sandbox exécute et capture le XML.
+
+```text
+Prompt  ──► LLM ──► extract_code ──► run_sandboxed ──► extract_xml ──► validate_bt
+                                           │
+                                           └─ échec ─► AgentResult(success=False, error_*)
+```
+
+- **Entry point** : `src.agents.pot_agent.PoTAgent.run(mission) → AgentResult`
+- **Prompt mode** : `program_of_thoughts` (injecte `get_full_api_docs(catalog)`)
+- **Config** : bloc `pot:` dans `base.yaml` + `configs/methods/pot.yaml`
+- **CLI** : `python -m src.eval.benchmark --config configs/base.yaml --prompt-mode pot`
+
+### 1.7.b ReAct / Reflexion agent — itératif
+
+Boucle LangGraph à 4 nœuds + edge conditionnel :
+
+```
+    generate_code → execute_code → validate → reflect ─┐
+          ▲                                            │
+          └──────────── (retry : score < target) ──────┘
+                         END si target_score atteint OU max_iterations dépassé
+```
+
+Chaque tour suivant reçoit le **code précédent + l'erreur + le feedback du validateur** via le template `REACT_REFINE_TEMPLATE` (prompt `react_agent` avec paramètre `history`). La boucle s'arrête dès qu'un tour produit un XML de score ≥ `target_score`, ou après `max_iterations`.
+
+- **Entry point** : `src.agents.react_agent.ReActAgent.run(mission) → AgentResult`
+- **Prompt mode** : `react_agent` (accepte `history=[{code, error, validator, iteration}]`)
+- **Config** : bloc `react_agent:` dans `base.yaml` + `configs/methods/react_agent.yaml`
+- **CLI** : `python -m src.eval.benchmark --config configs/base.yaml --prompt-mode react_agent`
+- **Dépendance optionnelle** : `pip install langgraph`. Sans LangGraph, `use_langgraph: false` (ou fallback automatique) exécute la même logique via une boucle Python pure.
+
+### 1.7.c MissionBuilder — API bicouche
+
+`src/builder/mission_builder.py` expose deux niveaux :
+
+- **Low-level** (flexibilité maximale) : `skill(id, name, **ports)`, `sequence(*children)`, `fallback(*children)` (≥2 enfants imposé), `reactive_fallback(...)`, `parallel(...)`, `repeat(child, num_cycles)` (un seul enfant imposé), `subtree_plus(id, autoremap)`.
+- **High-level** (patterns SR encodés) : `add_get_mission()` (SR-023), `add_calculate_path()` (SR-026), `add_base_preparation()`, `add_motion_subtree(step_type)` (SR-024/027), `add_execute(step_types=[...])` (SR-025, auto-registre les motion subtrees), `add_main_tree()`.
+
+Toute violation L1/L2/L3 lève une exception typée (`UnknownSkillError`, `PortError`, `StructuralError`, `MissingRequiredSkillError`) que l'agent peut afficher et corriger.
+
+### 1.7.d Sandbox
+
+`src/agents/sandbox.py` — exécution in-process avec deux couches :
+
+1. **AST allowlist** — rejette imports non-autorisés (seul `nav4rail_builder`), attributs dunder, noms dangereux (`open`, `eval`, `exec`, `__import__`, `globals`, `locals`, `input`, …).
+2. **Globals restreints** — `__builtins__` ne contient que les noms utiles (print, range, isinstance, types primitifs, exceptions).
+
+Un `_restricted_import()` custom résout `from nav4rail_builder import …` vers un module synthétique dont les classes sont pré-liées au `SkillsCatalog` partagé (le LLM n'a pas à instancier `SkillsCatalog` lui-même). Timeout SIGALRM best-effort sur POSIX.
+
+Ce n'est **pas** un sandbox d'isolation adverse ; c'est la barrière pragmatique suffisante pour empêcher un LLM local de lire/écrire des fichiers, charger des modules, ou s'échapper du namespace.
+
+### 1.7.e Intégration benchmark
+
+Dispatcher dans `src/eval/benchmark.py` : `training.method in {"pot", "react_agent"}` court-circuite le `_generate_xml(...)` classique et délègue à `agent.run(mission)`. Les champs suivants sont ajoutés à `results_detail.json` :
+
+| Champ | Description |
+| ----- | ----------- |
+| `agent_success` | True ssi sandbox OK **et** XML extrait |
+| `agent_code` | Code Python final (utile pour diagnostic) |
+| `agent_n_iterations` | 1 pour PoT, 1..`max_iterations` pour ReAct |
+| `agent_llm_latency_s` | Temps LLM cumulé sur toutes les itérations |
+| `agent_sandbox_latency_s` | Temps d'exécution sandbox cumulé |
+| `agent_error_type` / `agent_error_message` | Dernière erreur si échec |
+
+W&B reçoit également `eval/agent_iterations`, `eval/agent_llm_latency_s`, `eval/agent_sandbox_latency_s` par mission.
+
+### 1.7.f Ce qu'on cherche à mesurer
+
+1. **Gain net** : PoT/ReAct > CoT/schema_guided ? Sur quelles catégories (transport, inspection contrôlée, complexe) ?
+2. **Coût de la boucle** : Combien d'itérations ReAct utilise en moyenne ? Le score s'améliore-t-il vraiment au-delà du tour 2 ?
+3. **Surface d'erreur** : Ventilation des `agent_error_type` (SyntaxError, UnknownSkillError, PortError, StructuralError, TimeoutError).
+4. **Latence vs validité** : ReAct coûte N×LLM pour N itérations — est-ce que la validité gagnée justifie le coût en benchmarks long-tail ?
+
 ---
 
 # 2. Volet Dataset & Catalogue de Skills
@@ -458,6 +538,9 @@ def perturb_bt(valid_xml: str) -> str:
 - [ ] Schema-guided prompting (XSD injection)
 - [ ] Chain-of-Thought prompting
 - [ ] Dynamic few-shot (retrieval-augmented ICL)
+- [ ] **Program-of-Thoughts (PoT)** one-shot Code-as-Reasoning sur les 5 modèles (§1.7.a)
+- [ ] **ReAct / Reflexion** itératif (max_iterations=3) sur les 5 modèles (§1.7.b)
+- [ ] Ablation ReAct : sensibilité à `max_iterations` (1, 2, 3, 5) et `target_score` (0.9, 1.0)
 - [ ] Rapport Phase 1
 
 ## Phase 2 — SFT & PEFT (Semaine 3-5)
@@ -522,6 +605,8 @@ def perturb_bt(valid_xml: str) -> str:
 | **Rapport** | LaTeX (template arXiv) + `matplotlib`/`seaborn` pour les figures | Reproductible |
 | **Webapp** | Gradio (votre setup actuel) | Déjà en place, suffisant pour la démo |
 | **Dataset** | `datasets` (HuggingFace) | Chargement JSONL, splits, streaming |
+| **Code-as-Reasoning (PoT)** | `src.agents.pot_agent` + sandbox AST-allowlist (in-process `exec`) | Pas de dépendance externe ; 22ms/script typique |
+| **Code-as-Reasoning (ReAct)** | `langgraph` (optionnel, ≥0.2) — state machine 4 nœuds | Boucle `generate_code → execute → validate → reflect` avec edge conditionnel. Fallback boucle Python pure si LangGraph absent |
 
 ## 4.2 Structure du projet
 
@@ -558,14 +643,25 @@ FineTuningOnTelecomCluster/
 │   │   ├── eval/
 │   │   │   ├── validate_bt.py     # Votre validateur
 │   │   │   ├── metrics.py         # Toutes les métriques
-│   │   │   ├── benchmark.py       # Orchestration du benchmark
+│   │   │   ├── benchmark.py       # Orchestration du benchmark (dispatch pot/react_agent)
 │   │   │   └── llm_judge.py       # LLM-as-a-Judge (optionnel)
 │   │   │
 │   │   ├── data/
 │   │   │   ├── generate_dataset.py
 │   │   │   ├── generate_preferences.py
 │   │   │   ├── skills_loader.py   # Parse skills_catalog.yaml
-│   │   │   └── prompt_builder.py  # Construit les prompts depuis le catalogue
+│   │   │   └── prompt_builder.py  # 7 modes (incl. program_of_thoughts, react_agent)
+│   │   │
+│   │   ├── builder/                # Code-as-Reasoning — API MissionBuilder (§1.7)
+│   │   │   ├── __init__.py
+│   │   │   ├── mission_builder.py # API bicouche low-level + high-level (SR-023..027)
+│   │   │   └── api_docs.py        # get_full_api_docs(catalog) pour prompt injection
+│   │   │
+│   │   ├── agents/                 # Code-as-Reasoning — agents PoT/ReAct (§1.7)
+│   │   │   ├── __init__.py
+│   │   │   ├── sandbox.py         # AST allowlist + restricted exec
+│   │   │   ├── pot_agent.py       # Program-of-Thoughts (one-shot)
+│   │   │   └── react_agent.py     # ReAct/Reflexion (LangGraph + fallback)
 │   │   │
 │   │   ├── reward/
 │   │   │   ├── reward_fn.py       # Reward function pour RL
@@ -1035,6 +1131,7 @@ def run_benchmark(model_path, test_missions, output_dir, enrich_ports=True):
   \subsection{PEFT Variants (LoRA, DoRA, OFT)}
   \subsection{Preference Optimization (DPO, KTO, ORPO)}
   \subsection{Reinforcement Learning (GRPO, PPO)}
+  \subsection{Code-as-Reasoning Agents (PoT, ReAct)}
 
 \section{Experimental Setup}
   \subsection{Models}
@@ -1086,6 +1183,8 @@ def run_benchmark(model_path, test_missions, output_dir, enrich_ports=True):
 |---------|---------|--------|------|-------|------|-----|------|
 | **Zero-shot** | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | **Few-shot** | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
+| **Program-of-Thoughts (PoT)** | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
+| **ReAct / Reflexion** | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | **SFT** | ◇ Vast.ai | ◇ | ★ | ★ | ○ | ○ | ◇ |
 | **DPO** | — | — | ○ | ★ | ◇ | — | — |
 | **KTO** | — | — | ○ | ★ | ◇ | — | — |
@@ -1095,6 +1194,8 @@ def run_benchmark(model_path, test_missions, output_dir, enrich_ports=True):
 | **SimPO** | — | — | ◇ | ◇ | — | — | — |
 | **RFT** | — | — | ○ | ★ | — | — | — |
 | **Iterated DPO** | — | — | ◇ | ◇ | — | — | — |
+
+> PoT et ReAct sont des méthodes d'inférence agentique (Code-as-Reasoning, §1.7). Elles n'impliquent aucun fine-tuning — le LLM est consommé tel quel et la contrainte de validité est déplacée de l'apprentissage vers l'interpréteur (`MissionBuilder` + sandbox). Combinables a posteriori avec n'importe quel modèle fine-tuné (ex. SFT+ReAct, GRPO+ReAct).
 
 **Légende :**
 - ★ = Prioritaire (Phase 2-3)

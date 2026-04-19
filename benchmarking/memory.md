@@ -15,7 +15,7 @@ Multi-LLM benchmarking platform for BehaviorTree XML generation, targeting SNCF 
 - `data/safety_rules.yaml` — 27 rules across L1-L5 (5 new L5 rules: SR-023 to SR-027)
 - `data/test_missions.json` — 100 fixed test missions (seed=42), 8 categories, stratified
 - `src/data/skills_loader.py` — `SkillsCatalog` + `SafetyRulesLoader` classes
-- `src/data/prompt_builder.py` — 5 prompt modes: zero_shot, few_shot, schema_guided, chain_of_thought, sft
+- `src/data/prompt_builder.py` — 7 prompt modes: zero_shot, few_shot, schema_guided, chain_of_thought, sft, **program_of_thoughts**, **react_agent** (the last accepts an error `history` for iterative refinement)
 - `src/data/generate_sft_dataset.py` — Mission generation with category stratification
 
 ### Evaluation Layer
@@ -31,6 +31,15 @@ Multi-LLM benchmarking platform for BehaviorTree XML generation, targeting SNCF 
 - `src/train/kto_trainer.py` — KTO via `trl.KTOTrainer`
 - `src/train/orpo_trainer.py` — ORPO via `trl.ORPOTrainer`
 - `src/reward/reward_fn.py` — Composite reward function for GRPO
+
+### Code-as-Reasoning Layer (NEW — Phase 1.7)
+- `src/builder/mission_builder.py` — Bicouche MissionBuilder API: low-level (`skill`, `sequence`, `fallback`, `repeat`, `subtree_plus`) + high-level (`add_get_mission`, `add_calculate_path`, `add_base_preparation`, `add_execute`, `add_main_tree`). Enforces L1/L2/L3 + SR-023..SR-027 by construction, raises typed exceptions (`UnknownSkillError`, `PortError`, `StructuralError`, `MissingRequiredSkillError`)
+- `src/builder/api_docs.py` — `get_full_api_docs(catalog)` — produces the MissionBuilder reference injected into PoT/ReAct prompts (dynamically built from catalog, never drifts)
+- `src/agents/sandbox.py` — Static AST allowlist + restricted `exec()` namespace. Only `nav4rail_builder` importable; `open`, `eval`, dunder, `__import__` all blocked. Optional SIGALRM timeout
+- `src/agents/pot_agent.py` — `PoTAgent`: one-shot Code-as-Reasoning (prompt → LLM → extract_code → sandbox → XML)
+- `src/agents/react_agent.py` — `ReActAgent`: LangGraph state machine (generate_code → execute_code → validate → reflect), loops on `score < target_score` up to `max_iterations`. Plain-loop fallback if LangGraph isn't installed
+- `configs/methods/pot.yaml` + `configs/methods/react_agent.yaml` — Method-specific overrides (merged on top of `base.yaml` when `--prompt-mode pot` or `--prompt-mode react_agent` is passed)
+- Dispatch in `src/eval/benchmark.py`: `training.method == "pot" | "react_agent"` triggers the agent path; `detailed_results` gain `agent_success`, `agent_code`, `agent_n_iterations`, `agent_llm_latency_s`, `agent_sandbox_latency_s`, `agent_error_type`, `agent_error_message` fields
 
 ### Infrastructure
 - `src/utils/config.py` — YAML config loading with deep merge
@@ -62,3 +71,5 @@ Multi-LLM benchmarking platform for BehaviorTree XML generation, targeting SNCF 
 2. Analyze results, compute per-category metrics
 3. Generate SFT dataset from proxy LLM
 4. Begin Phase 1: SFT + QLoRA training runs
+5. **Run PoT + ReAct baselines** on all 5 models (`--prompt-mode pot`, `--prompt-mode react_agent`). Compare against CoT/schema_guided on the same test set.
+6. `pip install langgraph` on the cluster venv to activate the real ReAct state machine (plain-loop fallback is functional but lacks graph introspection)
