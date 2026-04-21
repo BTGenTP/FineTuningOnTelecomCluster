@@ -154,10 +154,21 @@ eval:
   temperature: 0.0
   max_new_tokens: 4096
   top_p: 1.0
-  constrained_decoding: false
   enrich_ports: true
   report_to: "wandb"  # wandb | none — track inference runs (zero_shot, few_shot, adapter eval)
   auto_eval: true     # run benchmark automatically after training
+
+  # ── Grammar-constrained decoding ──────────────────────────────────────────
+  # mode: none    — baseline, no constraint (default)
+  # mode: gbnf    — transformers-cfg GBNF LogitsProcessor (XML direct)
+  # mode: outlines — Outlines JSONLogitsProcessor or RegexLogitsProcessor
+  # mode: all     — iterate over [none, gbnf, outlines] in one benchmark run
+  constraint:
+    mode: "none"
+    gbnf_path: "src/eval/bt_grammar.gbnf"
+    # For Outlines: provide EITHER a regex OR a Pydantic schema (schema wins if both set).
+    outlines_regex: null
+    outlines_schema: "src.eval.bt_schema:BehaviorTree"
 
 # ── GRPO-specific (used when training.method == "grpo") ──────────────────────
 grpo:

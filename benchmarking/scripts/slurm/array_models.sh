@@ -6,6 +6,12 @@
 # Usage:
 #   METHOD=sft PROMPT_MODE=zero_shot sbatch scripts/slurm/array_models.sh
 #   sbatch --partition=P100 scripts/slurm/array_models.sh  # 7B models only
+#
+# Grammar-constrained decoding:
+#   CONSTRAINT=none    METHOD=zero_shot sbatch scripts/slurm/array_models.sh   # baseline
+#   CONSTRAINT=gbnf    METHOD=zero_shot sbatch scripts/slurm/array_models.sh   # transformers-cfg
+#   CONSTRAINT=outlines METHOD=zero_shot sbatch scripts/slurm/array_models.sh  # outlines JSON
+#   CONSTRAINT=all     METHOD=zero_shot sbatch scripts/slurm/array_models.sh   # all 3 sequentially per model
 
 #SBATCH --job-name=nav4rail_array
 #SBATCH --partition=3090
@@ -22,8 +28,9 @@ MODELS=("mistral_7b" "llama3_8b" "qwen25_coder_7b" "gemma2_9b")
 MODEL=${MODELS[$SLURM_ARRAY_TASK_ID]}
 METHOD=${METHOD:-zero_shot}
 PROMPT_MODE=${PROMPT_MODE:-$METHOD}
+CONSTRAINT=${CONSTRAINT:-none}
 
-echo "Array task $SLURM_ARRAY_TASK_ID: model=$MODEL method=$METHOD"
+echo "Array task $SLURM_ARRAY_TASK_ID: model=$MODEL method=$METHOD constraint=$CONSTRAINT"
 
 # ── Common setup (venv, PYTHONPATH, diagnostics) ────────────────────────────
 # Slurm executes a copy in /var/spool/slurmd/...; SLURM_SUBMIT_DIR is the dir where sbatch ran.
@@ -40,4 +47,5 @@ python -m src.eval.benchmark \
     --config configs/base.yaml \
     --model "$MODEL" \
     --prompt-mode "$PROMPT_MODE" \
-    --output "runs/slurm/nav4rail_${METHOD}_${MODEL}_${SLURM_ARRAY_JOB_ID}/"
+    --constraint "$CONSTRAINT" \
+    --output "runs/slurm/nav4rail_${METHOD}_${CONSTRAINT}_${MODEL}_${SLURM_ARRAY_JOB_ID}/"

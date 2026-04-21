@@ -14,6 +14,12 @@
 #   ./scripts/vastai_run.sh --gpu-ram 48 --query "gpu_name=RTX_4090"
 #   ./scripts/vastai_run.sh --dry-run                    # show search, no launch
 #   GITHUB_TOKEN=ghp_xxx ...                             # private GitHub over HTTPS (optional)
+#
+# Grammar-constrained decoding (forwarded to `python -m src.eval.benchmark --constraint`):
+#   ./scripts/vastai_run.sh --constraint none                  # baseline (default)
+#   ./scripts/vastai_run.sh --constraint gbnf                  # transformers-cfg
+#   ./scripts/vastai_run.sh --constraint outlines              # outlines JSON
+#   ./scripts/vastai_run.sh --constraint all --model mistral_7b  # one instance, 3 constraints
 # ============================================================================
 
 set -euo pipefail
@@ -30,6 +36,7 @@ mkdir -p "$(dirname "$INSTANCES_LOG")" "$ONSTART_TMPDIR"
 METHOD="${METHOD:-zero_shot}"
 PROMPT_MODE="${PROMPT_MODE:-$METHOD}"
 MODEL="${MODEL:-}"          # empty = all models
+CONSTRAINT="${CONSTRAINT:-none}"  # none | gbnf | outlines | all
 DISK="${DISK:-60}"
 IMAGE="${IMAGE:-pytorch/pytorch:2.4.1-cuda12.4-cudnn9-devel}"
 DRY_RUN="${DRY_RUN:-0}"
@@ -45,6 +52,7 @@ while [[ $# -gt 0 ]]; do
         --model)     MODEL="$2";     shift 2 ;;
         --method)    METHOD="$2";    PROMPT_MODE="$2"; shift 2 ;;
         --prompt-mode) PROMPT_MODE="$2"; shift 2 ;;
+        --constraint) CONSTRAINT="$2"; shift 2 ;;
         --disk)      DISK="$2";      shift 2 ;;
         --image)     IMAGE="$2";     shift 2 ;;
         --query)     EXTRA_QUERY="$2"; shift 2 ;;
@@ -170,7 +178,8 @@ write_onstart() {
     local model="$1"
     local method="$2"
     local prompt_mode="$3"
-    local out_file="$4"
+    local constraint="$4"
+    local out_file="$5"
 
     cat > "$out_file" <<ONSTART
 #!/bin/bash
@@ -181,6 +190,7 @@ echo "=== vast.ai NAV4RAIL benchmark ==="
 echo "Model:       ${model}"
 echo "Method:      ${method}"
 echo "Prompt mode: ${prompt_mode}"
+echo "Constraint:  ${constraint}"
 echo "Date:        \$(date)"
 echo "GPU:         \$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader)"
 
@@ -205,7 +215,7 @@ pip install --quiet --disable-pip-version-check -r requirements.txt
 export HF_TOKEN="${HF_TOKEN}"
 export WANDB_API_KEY="${WANDB_API_KEY:-}"
 export WANDB_PROJECT="nav4rail-bench"
-export WANDB_RUN_GROUP="vastai_${method}_\$(date +%Y%m%d)"
+export WANDB_RUN_GROUP="vastai_${method}_${constraint}_\$(date +%Y%m%d)"
 export PYTHONPATH="\${PYTHONPATH:-}:/workspace/repo/benchmarking"
 
 mkdir -p /workspace/results
@@ -213,11 +223,12 @@ python -m src.eval.benchmark \\
     --config configs/base.yaml \\
     --model "${model}" \\
     --prompt-mode "${prompt_mode}" \\
-    --output "/workspace/results/nav4rail_${method}_${model}/"
+    --constraint "${constraint}" \\
+    --output "/workspace/results/nav4rail_${method}_${constraint}_${model}/"
 
 echo "=== Done — archiving results ==="
-tar czf /workspace/results_${model}.tar.gz -C /workspace/results .
-echo "Results at /workspace/results_${model}.tar.gz"
+tar czf /workspace/results_${model}_${constraint}.tar.gz -C /workspace/results .
+echo "Results at /workspace/results_${model}_${constraint}.tar.gz"
 ONSTART
 
     chmod +x "$out_file"
@@ -225,13 +236,14 @@ ONSTART
 
 # ── Launch loop ─────────────────────────────────────────────────────────────
 echo "=== vast.ai NAV4RAIL Benchmark Launcher ==="
-echo "Models:    ${MODELS[*]}"
-echo "Method:    ${METHOD}"
-echo "Image:     ${IMAGE}"
-echo "Disk:      ${DISK} GB"
-echo "Extra:     ${EXTRA_QUERY}"
-echo "Git:       ${GIT_REPO} (branch ${GIT_BRANCH})"
-echo "Log:       ${INSTANCES_LOG}"
+echo "Models:     ${MODELS[*]}"
+echo "Method:     ${METHOD}"
+echo "Constraint: ${CONSTRAINT}"
+echo "Image:      ${IMAGE}"
+echo "Disk:       ${DISK} GB"
+echo "Extra:      ${EXTRA_QUERY}"
+echo "Git:        ${GIT_REPO} (branch ${GIT_BRANCH})"
+echo "Log:        ${INSTANCES_LOG}"
 echo ""
 
 USED_OFFERS=""
@@ -251,8 +263,8 @@ for model in "${MODELS[@]}"; do
     echo "  Selected offer: ${offer_id}"
     USED_OFFERS="${USED_OFFERS} ${offer_id}"
 
-    onstart_file="${ONSTART_TMPDIR}/onstart_${model}.sh"
-    write_onstart "$model" "$METHOD" "$PROMPT_MODE" "$onstart_file"
+    onstart_file="${ONSTART_TMPDIR}/onstart_${model}_${CONSTRAINT}.sh"
+    write_onstart "$model" "$METHOD" "$PROMPT_MODE" "$CONSTRAINT" "$onstart_file"
 
     if [ "$DRY_RUN" = "1" ]; then
         echo "  [DRY_RUN] Would launch on offer ${offer_id} with onstart ${onstart_file}"
@@ -294,8 +306,8 @@ except Exception as e:
 
     echo "  Instance launched: ${instance_id}"
     LAUNCHED+=("${instance_id}:${model}")
-    printf '%s\t%s\t%s\t%s\t%s\n' \
-        "$(date -Iseconds)" "$instance_id" "$model" "$METHOD" "$offer_id" \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$(date -Iseconds)" "$instance_id" "$model" "$METHOD" "$CONSTRAINT" "$offer_id" \
         >> "$INSTANCES_LOG"
 done
 
@@ -320,8 +332,8 @@ if [ "${#LAUNCHED[@]}" -gt 0 ]; then
 
 Monitor:   vastai show instances
 Logs:      vastai logs <instance_id>   (only after Status is running — during "loading" Docker has no container yet)
-SSH:       vastai attach ssh <instance_id> ~/.ssh/id_ed25519.pub   # or: $(cat ~/.ssh/id_rsa.pub)
-           vastai ssh-url <instance_id>   # prints ssh://… then: ssh -i ~/.ssh/id_ed25519 -p PORT root@HOST
+SSH:       vastai attach ssh <instance_id> ~/.ssh/id_rsa.pub   # or: $(cat ~/.ssh/id_rsa.pub)
+           vastai ssh-url <instance_id>   # prints ssh://… then: ssh -i ~/.ssh/id_rsa root@HOST:PORT or ssh -i ~/.ssh/id_rsa -p PORT root@HOST
            tail -f /workspace/onstart.log
 Download:  vastai scp <instance_id>:/workspace/results_<model>.tar.gz ./runs/vastai/
 Destroy:   vastai destroy instance <instance_id>

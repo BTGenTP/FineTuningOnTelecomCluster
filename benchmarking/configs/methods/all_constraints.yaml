@@ -1,0 +1,21 @@
+# Grammar-Constrained Decoding — Matrix (baseline + GBNF + Outlines)
+# ===================================================================
+# Invoke with:
+#   python -m src.eval.benchmark --config configs/base.yaml --prompt-mode all_constraints
+#   # or via array:  METHOD=all_constraints CONSTRAINT=all sbatch scripts/slurm/array_models.sh
+#
+# Loads the model ONCE and runs three passes over the same test missions —
+# one per constraint mode. Each pass gets its own output dir and W&B run
+# (group = eval_<method>_<constraint>) so the three are side-by-side
+# comparable with identical seeds/data.
+#
+# Expect total wall time ≈ 3× a single pass, minus one model-load overhead.
+
+eval:
+  constraint:
+    mode: "all"
+    gbnf_path: "src/eval/bt_grammar.gbnf"
+    outlines_regex: null
+    outlines_schema: "src.eval.bt_schema:BehaviorTree"
+
+  enrich_ports: true

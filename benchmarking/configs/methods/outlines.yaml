@@ -1,0 +1,19 @@
+# Grammar-Constrained Decoding — Outlines (JSON Schema → FSM)
+# ============================================================
+# Invoke with:
+#   python -m src.eval.benchmark --config configs/base.yaml --prompt-mode outlines
+#   # or via array:  METHOD=outlines CONSTRAINT=outlines sbatch scripts/slurm/array_models.sh
+#
+# Outlines compiles a Pydantic JSON schema into a regex FSM and forces the
+# decoder to stay on-FSM. The model emits JSON; `json_to_xml` converts to
+# BTCPP v4 XML before scoring.
+
+eval:
+  constraint:
+    mode: "outlines"
+    # Pydantic class path for JSON-mode. Swap for `outlines_regex` if you want
+    # regex-mode (then set outlines_schema: null).
+    outlines_regex: null
+    outlines_schema: "src.eval.bt_schema:BehaviorTree"
+
+  enrich_ports: true

@@ -6,6 +6,9 @@ Evaluates a model on the fixed test set and produces metrics + detailed results.
 Usage:
     python -m src.eval.benchmark --config configs/base.yaml --model mistral_7b
     python -m src.eval.benchmark --adapter runs/slurm/nav4rail_sft_lora_XXXX/best_checkpoint
+    python -m src.eval.benchmark --constraint gbnf        # transformers-cfg decoding
+    python -m src.eval.benchmark --constraint outlines    # outlines JSON -> XML
+    python -m src.eval.benchmark --constraint all         # iterate over none/gbnf/outlines
 """
 
 from __future__ import annotations
@@ -60,9 +63,17 @@ def _init_wandb_for_eval(cfg: dict, adapter_path: str | None) -> tuple[Any, bool
     project = cfg.get("experiment", {}).get("wandb_project", "nav4rail-bench")
     entity = cfg.get("experiment", {}).get("wandb_entity")
 
+    constraint_mode = (
+        cfg.get("eval", {}).get("constraint", {}).get("mode", "none") or "none"
+    )
     run_kind = "eval_adapter" if adapter_path else f"eval_{prompt_mode}"
     run_name = f"{run_kind}_{model_key}"
-    tags = ["eval", model_key, prompt_mode, peft_method, f"phase_{phase}"]
+    if constraint_mode != "none":
+        run_name = f"{run_name}_{constraint_mode}"
+    tags = [
+        "eval", model_key, prompt_mode, peft_method, f"phase_{phase}",
+        f"constraint_{constraint_mode}",
+    ]
     if adapter_path:
         tags.append("adapter")
 
@@ -72,12 +83,13 @@ def _init_wandb_for_eval(cfg: dict, adapter_path: str | None) -> tuple[Any, bool
             entity=entity,
             name=run_name,
             tags=tags,
-            group=os.environ.get("WANDB_RUN_GROUP") or f"eval_{method}",
-            job_type="inference",
+            group=os.environ.get("WANDB_RUN_GROUP") or f"eval_{method}_{constraint_mode}",
+            job_type="inference_constrained" if constraint_mode != "none" else "inference_baseline",
             config={
                 **cfg,
                 "adapter_path": adapter_path,
                 "prompt_mode": prompt_mode,
+                "constraint_mode": constraint_mode,
             },
         )
     except Exception as e:  # noqa: BLE001
@@ -88,9 +100,14 @@ def _init_wandb_for_eval(cfg: dict, adapter_path: str | None) -> tuple[Any, bool
 
 
 def _generate_xml(
-    model, tokenizer, prompt, eval_cfg: dict
+    model, tokenizer, prompt, eval_cfg: dict, constraint=None,
 ) -> tuple[str, float, int]:
-    """Generate XML from prompt, return (xml_str, latency_s, n_tokens)."""
+    """Generate XML from prompt, return (xml_str, latency_s, n_tokens).
+
+    `constraint` is an optional `ConstraintHandle` (from src.eval.constrained).
+    When active, its LogitsProcessor is merged into generate kwargs; if the
+    backend emits JSON (Outlines JSON-mode), its post-processor converts to XML.
+    """
     import torch
 
     temperature = eval_cfg.get("temperature", 0.0)
@@ -114,6 +131,11 @@ def _generate_xml(
         gen_kwargs["temperature"] = temperature
         gen_kwargs["top_p"] = top_p
 
+    if constraint is not None and constraint.is_active():
+        from src.eval.constrained import apply_to_generate_kwargs
+
+        apply_to_generate_kwargs(gen_kwargs, constraint)
+
     t0 = time.time()
     with torch.no_grad():
         outputs = model.generate(**inputs, **gen_kwargs)
@@ -121,7 +143,13 @@ def _generate_xml(
 
     new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
     n_tokens = len(new_tokens)
-    xml_str = tokenizer.decode(new_tokens, skip_special_tokens=True)
+    raw = tokenizer.decode(new_tokens, skip_special_tokens=True)
+
+    # Outlines JSON-mode post-processing (JSON -> XML). GBNF returns XML as-is.
+    if constraint is not None and constraint.post_process is not None:
+        xml_str = constraint.post_process(raw)
+    else:
+        xml_str = raw
 
     return xml_str, latency, n_tokens
 
@@ -176,6 +204,25 @@ def run_benchmark(
         prompt_mode = training_method
     else:
         prompt_mode = "zero_shot"  # Default for trained models
+
+    # ── Grammar-constrained decoding handle (built once, reused per mission) ──
+    constraint_mode = (
+        cfg.get("eval", {}).get("constraint", {}).get("mode", "none") or "none"
+    )
+    constraint = None
+    if constraint_mode != "none":
+        from src.eval.constrained import build_constraint
+
+        constraint = build_constraint(
+            mode=constraint_mode,
+            tokenizer=tokenizer,
+            cfg=cfg,
+            catalog=catalog,
+        )
+        logger.info(
+            "Constrained decoding ACTIVE — mode=%s backend_version=%s",
+            constraint.mode, constraint.backend_version,
+        )
 
     # ── Code-as-Reasoning agents (single construction, reused per mission) ──
     agent = None
@@ -253,8 +300,10 @@ def run_benchmark(
                 safety_rules=safety_rules,
             )
 
-            # Generate
-            xml_str, latency_s, n_tokens = _generate_xml(model, tokenizer, prompt, eval_cfg)
+            # Generate (constraint may be None for baseline)
+            xml_str, latency_s, n_tokens = _generate_xml(
+                model, tokenizer, prompt, eval_cfg, constraint=constraint,
+            )
 
         # Optionally enrich ports
         if eval_cfg.get("enrich_ports", True):
@@ -307,6 +356,24 @@ def run_benchmark(
     summary["training_method"] = training_method
     summary["peft_method"] = cfg.get("peft", {}).get("method", "none")
     summary["adapter_path"] = adapter_path
+    summary["constraint_mode"] = constraint_mode
+    if constraint is not None:
+        summary["constraint_backend_version"] = constraint.backend_version
+        # Hash the grammar / schema source to make runs reproducibly traceable.
+        import hashlib
+        try:
+            if constraint.mode == "gbnf":
+                gp = Path(
+                    cfg["eval"]["constraint"].get("gbnf_path", "src/eval/bt_grammar.gbnf")
+                )
+                if not gp.is_absolute():
+                    gp = Path(__file__).parent.parent.parent / gp
+                if gp.is_file():
+                    summary["grammar_sha256"] = hashlib.sha256(gp.read_bytes()).hexdigest()[:16]
+            elif constraint.mode == "outlines":
+                summary["outlines_schema_spec"] = cfg["eval"]["constraint"].get("outlines_schema")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to compute constraint source hash: %s", e)
 
     # Per-category breakdown
     from collections import defaultdict
@@ -397,20 +464,82 @@ def main():
     parser.add_argument("--output", default=None, help="Output directory")
     parser.add_argument("--prompt-mode", default=None,
                         choices=["zero_shot", "few_shot", "schema_guided", "chain_of_thought",
-                                 "pot", "react_agent"])
+                                 "pot", "react_agent",
+                                 "gbnf", "outlines", "all_constraints"])
+    parser.add_argument("--constraint", default=None,
+                        choices=["none", "gbnf", "outlines", "all"],
+                        help="Grammar-constrained decoding backend (overrides cfg.eval.constraint.mode).")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     from src.utils.config import load_config
 
-    # For agent methods (pot, react_agent) we pass `method=` so that
-    # `configs/methods/<method>.yaml` is merged on top of the base config,
-    # bringing in any per-method tuning knobs.
-    method_override = args.prompt_mode if args.prompt_mode in ("pot", "react_agent") else None
+    # Method configs that live under configs/methods/ and should be merged via load_config.
+    # Agents (pot, react_agent) change prompt building; constraint presets
+    # (gbnf, outlines, all_constraints) only set eval.constraint.*.
+    _MERGEABLE_METHODS = ("pot", "react_agent", "gbnf", "outlines", "all_constraints")
+    method_override = args.prompt_mode if args.prompt_mode in _MERGEABLE_METHODS else None
     cfg = load_config(args.config, model=args.model, method=method_override)
     if args.prompt_mode:
         cfg.setdefault("training", {})["method"] = args.prompt_mode
+
+    if args.constraint:
+        cfg.setdefault("eval", {}).setdefault("constraint", {})["mode"] = args.constraint
+
+    # ── Constraint matrix: mode == "all" iterates over none/gbnf/outlines ───
+    # Model is loaded once and reused across constraint modes — cheap comparison.
+    requested = cfg.get("eval", {}).get("constraint", {}).get("mode", "none") or "none"
+    if requested == "all":
+        from src.utils.model_loader import load_for_inference
+
+        model, tokenizer = load_for_inference(cfg, adapter_path=args.adapter)
+        logger.info("Constraint matrix mode: iterating over [none, gbnf, outlines]")
+
+        base_output = args.output
+        results = {}
+        for mode in ("none", "gbnf", "outlines"):
+            logger.info("─" * 60)
+            logger.info("Constraint pass: %s", mode)
+            logger.info("─" * 60)
+            import copy as _copy
+
+            cfg_mode = _copy.deepcopy(cfg)
+            cfg_mode["eval"]["constraint"]["mode"] = mode
+
+            if base_output:
+                out_dir = f"{base_output.rstrip('/')}_{mode}"
+            else:
+                import time as _time
+                model_key = cfg.get("model", {}).get("key", "unknown")
+                method = cfg.get("training", {}).get("method", "zero_shot")
+                out_dir = f"runs/{method}_{mode}_{model_key}_{int(_time.time())}"
+
+            try:
+                results[mode] = run_benchmark(
+                    cfg_mode,
+                    model=model,
+                    tokenizer=tokenizer,
+                    adapter_path=args.adapter,
+                    output_dir=out_dir,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.exception("Constraint mode %s failed: %s", mode, e)
+                results[mode] = {"error": str(e)}
+
+        logger.info("─" * 60)
+        logger.info("Matrix summary:")
+        for mode, summary in results.items():
+            if "error" in summary:
+                logger.info("  %-10s FAILED: %s", mode, summary["error"])
+            else:
+                logger.info(
+                    "  %-10s validity=%.1f%% mean_score=%.3f",
+                    mode,
+                    100 * summary.get("xml_validity_rate", 0.0),
+                    summary.get("mean_score", 0.0),
+                )
+        return
 
     run_benchmark(cfg, adapter_path=args.adapter, output_dir=args.output)
 
