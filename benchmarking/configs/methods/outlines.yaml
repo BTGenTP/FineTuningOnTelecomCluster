@@ -7,13 +7,26 @@
 # Outlines compiles a Pydantic JSON schema into a regex FSM and forces the
 # decoder to stay on-FSM. The model emits JSON; `json_to_xml` converts to
 # BTCPP v4 XML before scoring.
+#
+# ⚠ PERFORMANCE WARNING
+# Recursive JSON schemas × large vocabularies (Llama3 128K, Qwen 152K, Gemma 256K)
+# can make FSM compilation take *many* minutes — and in the worst case hang the
+# job. If you see the log "compiling JSON-schema FSM …" without a following
+# "compiled in …" line for 10+ min, switch to regex mode by uncommenting the
+# `outlines_regex` block below. Regex loses structural guarantees on node ids
+# and ports but keeps XML well-formedness and compiles in seconds.
 
 eval:
   constraint:
     mode: "outlines"
-    # Pydantic class path for JSON-mode. Swap for `outlines_regex` if you want
-    # regex-mode (then set outlines_schema: null).
+
+    # JSON-schema mode (default). Leave regex null to use the Pydantic class.
     outlines_regex: null
     outlines_schema: "src.eval.bt_schema:BehaviorTree"
+
+    # Regex-mode fallback (uncomment + set outlines_schema: null to activate).
+    # Permissive BTCPP v4 shell: root + BehaviorTree wrapper, anything inside.
+    # outlines_regex: '<root BTCPP_format="4" main_tree_to_execute="[A-Za-z_][A-Za-z_0-9]*">\s*<BehaviorTree ID="[A-Za-z_][A-Za-z_0-9]*">[\s\S]*?</BehaviorTree>\s*</root>'
+    # outlines_schema: null
 
   enrich_ports: true

@@ -28,6 +28,17 @@ set -euo pipefail
 BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$BENCH_DIR"
 
+# ── Auto-load .env (HF_TOKEN, WANDB_API_KEY, VAST_API_KEY, …) ───────────────
+# Rsynced from the workstation by `cluster_exec.sh submit`. Any already-exported
+# variable wins (Slurm env > .env), so users can override via `VAR=val sbatch`.
+if [ -r "$BENCH_DIR/.env" ]; then
+    echo "[_common.sh] Loading env from $BENCH_DIR/.env"
+    set -a
+    # shellcheck disable=SC1091
+    . "$BENCH_DIR/.env"
+    set +a
+fi
+
 VENV_DIR="${VENV_DIR:-$HOME/.venvs/nav4rail_bench}"
 # Partition-scoped venv: P100 and 3090 need different package builds (torch, bitsandbytes).
 if [ -n "${SLURM_JOB_PARTITION:-}" ]; then
@@ -94,9 +105,12 @@ if [ -z "${HF_TOKEN:-}" ]; then
     done
     unset _hf_token_file
 fi
-if [ -z "${HF_TOKEN:-}" ]; then
+if [ -n "${HF_TOKEN:-}" ]; then
+    export HF_TOKEN                         # ensure child Python sees it
+    export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"  # newer HF_HUB clients look here
+else
     echo "[_common.sh] WARNING: HF_TOKEN not set — gated models (e.g. gemma) will fail."
-    echo "  Fix: huggingface-cli login   (run once on the cluster login node)"
+    echo "  Fix: add HF_TOKEN=hf_... to $BENCH_DIR/.env, or huggingface-cli login."
 fi
 
 # ── Weights & Biases key (track training AND inference runs) ────────────────
@@ -108,9 +122,11 @@ if [ -z "${WANDB_API_KEY:-}" ] && [ -f "$HOME/.netrc" ]; then
     fi
     unset _wandb_key
 fi
-if [ -z "${WANDB_API_KEY:-}" ]; then
+if [ -n "${WANDB_API_KEY:-}" ]; then
+    export WANDB_API_KEY                    # ensure child Python sees it
+else
     echo "[_common.sh] WARNING: WANDB_API_KEY not set — W&B tracking will be disabled."
-    echo "  Fix: wandb login   (run once on the cluster login node)"
+    echo "  Fix: add WANDB_API_KEY=... to $BENCH_DIR/.env, or wandb login."
 fi
 export WANDB_PROJECT="${WANDB_PROJECT:-nav4rail-bench}"
 

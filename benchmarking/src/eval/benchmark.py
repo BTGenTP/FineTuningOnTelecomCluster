@@ -134,6 +134,11 @@ def _generate_xml(
     if constraint is not None and constraint.is_active():
         from src.eval.constrained import apply_to_generate_kwargs
 
+        # Stateful backends (transformers-cfg's GBNF processor) retain the
+        # per-sequence input-ids length and raise "Input ID's length is
+        # inconsistent with the current state" if reused across missions.
+        # `fresh_processor()` is a no-op for stateless backends (Outlines).
+        constraint.fresh_processor()
         apply_to_generate_kwargs(gen_kwargs, constraint)
 
     t0 = time.time()

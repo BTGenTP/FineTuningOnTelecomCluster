@@ -32,6 +32,16 @@ INSTANCES_LOG="${BENCH_DIR}/runs/vastai/instances.log"
 ONSTART_TMPDIR="${BENCH_DIR}/runs/vastai/onstart"
 mkdir -p "$(dirname "$INSTANCES_LOG")" "$ONSTART_TMPDIR"
 
+# ── Auto-load .env (VAST_API_KEY, HF_TOKEN, WANDB_API_KEY, …) ───────────────
+# Already-exported vars win so callers can override per-run.
+if [ -r "${BENCH_DIR}/.env" ]; then
+    echo "[vastai_run.sh] Loading env from ${BENCH_DIR}/.env"
+    set -a
+    # shellcheck disable=SC1091
+    . "${BENCH_DIR}/.env"
+    set +a
+fi
+
 # ── Defaults ────────────────────────────────────────────────────────────────
 METHOD="${METHOD:-zero_shot}"
 PROMPT_MODE="${PROMPT_MODE:-$METHOD}"

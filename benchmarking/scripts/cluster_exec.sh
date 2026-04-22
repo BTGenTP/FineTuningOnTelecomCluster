@@ -74,6 +74,18 @@ do_submit() {
         remote_script="${REMOTE_PATH}/scripts/slurm/${script}"
     fi
 
+    # ── Sync .env to cluster so _common.sh can source it ────────────────────
+    # Paths: this script is in scripts/, so benchmarking/ is one level up.
+    local bench_dir
+    bench_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    if [ -r "${bench_dir}/.env" ]; then
+        echo "Syncing .env to ${REMOTE_HOST}:${REMOTE_PATH}/.env"
+        # --chmod=600 keeps the token private on the shared cluster FS.
+        rsync -az --chmod=F600 "${bench_dir}/.env" "${REMOTE_HOST}:${REMOTE_PATH}/.env"
+    else
+        echo "Note: no ${bench_dir}/.env found — relying on cluster-side credentials."
+    fi
+
     echo "Submitting: ${remote_script}"
     [ -n "$env_exports" ] && echo "Env: $env_exports"
 
