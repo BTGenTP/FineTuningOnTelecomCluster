@@ -73,7 +73,8 @@ subtree-node ::= "<SubTreePlus" name-attr? " ID=\"" ident "\" __autoremap=\"true
 # Attributes
 # ----------------------------------------------------------------------------
 name-attr ::= " name=\"" name-value "\""
-name-value ::= [A-Za-z0-9 _\-]+
+# Hyphen first: transformers_cfg rejects `\-` inside character classes.
+name-value ::= [-A-Za-z0-9_ ]+
 
 port-attr ::= " " port-key "=\"" port-value "\""
 port-key   ::= [a-zA-Z_] [a-zA-Z0-9_]*

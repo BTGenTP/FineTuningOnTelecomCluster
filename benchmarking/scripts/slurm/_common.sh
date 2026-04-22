@@ -14,7 +14,8 @@
 #   1. cd to benchmarking/ root (reliable cwd regardless of sbatch location)
 #   2. Load CUDA module (for GPU access)
 #   3. Create venv if missing, activate it
-#   4. Clear PYTHONHOME (module load sets it, breaks venvs)
+#   4. Load the same Python module as the venv base interpreter (LD_LIBRARY_PATH for
+#      libbz2 etc.) and clear PYTHONHOME (module load sets it, breaks venvs)
 #   5. Ensure all requirements.txt deps are installed (idempotent, flock-serialized)
 #   6. Set PYTHONPATH so `python -m src.*` works
 #   7. Print diagnostic info to stdout (captured by SLURM .out)
@@ -66,6 +67,22 @@ source "$VENV_DIR/bin/activate"
 # installed in the venv.
 # See: https://docs.python.org/3/using/cmdline.html#envvar-PYTHONHOME
 unset PYTHONHOME 2>/dev/null || true
+
+# ── Python module runtime libs (libbz2 → _bz2 → datasets import chain) ───────
+# Venv creation loads python/3.11.13 once; batch jobs otherwise skip it, and
+# stripped compute images may not ship libbz2 on the default linker path.
+module load python/3.11.13 2>/dev/null || true
+unset PYTHONHOME 2>/dev/null || true
+for _bz_dir in /usr/lib/x86_64-linux-gnu /usr/lib64 /lib64; do
+    if [ -f "$_bz_dir/libbz2.so.1.0" ] || [ -f "$_bz_dir/libbz2.so.1" ]; then
+        case ":${LD_LIBRARY_PATH:-}:" in *":${_bz_dir}:"*) ;; *)
+            export LD_LIBRARY_PATH="${_bz_dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            ;;
+        esac
+        break
+    fi
+done
+unset _bz_dir
 
 # ── Hugging Face token (needed for gated repos like google/gemma-2-9b-it) ─
 if [ -z "${HF_TOKEN:-}" ]; then
@@ -138,4 +155,5 @@ echo "  PYTHONPATH: $PYTHONPATH"
 echo "  PYTHONHOME: ${PYTHONHOME:-<unset>}"
 echo "  GPU:        $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo 'N/A')"
 echo "  yaml check: $(python -c 'import yaml; print(yaml.__version__)' 2>&1)"
+echo "  bz2 check:  $(python -c "import bz2; print('ok')" 2>&1)"
 echo "============================="

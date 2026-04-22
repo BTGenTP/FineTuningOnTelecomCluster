@@ -495,6 +495,11 @@ def main():
 
         model, tokenizer = load_for_inference(cfg, adapter_path=args.adapter)
         logger.info("Constraint matrix mode: iterating over [none, gbnf, outlines]")
+        # One W&B run per constraint pass; default group ties them together in the UI.
+        if not os.environ.get("WANDB_RUN_GROUP"):
+            _mk = cfg.get("model", {}).get("key", "unknown")
+            _mt = cfg.get("training", {}).get("method", "zero_shot")
+            os.environ["WANDB_RUN_GROUP"] = f"eval_matrix_{_mt}_{_mk}"
 
         base_output = args.output
         results = {}

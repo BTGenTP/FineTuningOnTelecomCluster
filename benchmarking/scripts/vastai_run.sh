@@ -332,10 +332,12 @@ if [ "${#LAUNCHED[@]}" -gt 0 ]; then
 
 Monitor:   vastai show instances
 Logs:      vastai logs <instance_id>   (only after Status is running — during "loading" Docker has no container yet)
-SSH:       vastai attach ssh <instance_id> ~/.ssh/id_rsa.pub   # or: $(cat ~/.ssh/id_rsa.pub)
-           vastai ssh-url <instance_id>   # prints ssh://… then: ssh -i ~/.ssh/id_rsa root@HOST:PORT or ssh -i ~/.ssh/id_rsa -p PORT root@HOST
+SSH:       vastai attach ssh <instance_id> ~/.ssh/id_rsa.pub
+           vastai ssh-url <instance_id>   # puis: ssh -i ~/.ssh/id_rsa … (voir URL)
            tail -f /workspace/onstart.log
-Download:  vastai scp <instance_id>:/workspace/results_<model>.tar.gz ./runs/vastai/
+Download:  ./scripts/vastai_instance.sh copy <instance_id>:/workspace/results_<model>.tar.gz ./runs/vastai/
+           # (évite vastai copy / rsync « Unknown module », cf. https://github.com/vast-ai/vast-cli/issues/326 )
+           vastai scp-url <instance_id>   # aide alternative
 Destroy:   vastai destroy instance <instance_id>
 All at once:
   awk -F'\t' 'NR>FNR{next} {print \$2}' ${INSTANCES_LOG} | xargs -n1 vastai destroy instance
