@@ -19,12 +19,12 @@
 #SBATCH --mem=48G
 #SBATCH --cpus-per-task=4
 #SBATCH --time=08:00:00
-#SBATCH --array=0-3
+#SBATCH --array=0-2
 #SBATCH --output=runs/slurm/nav4rail_array_%A_%a/slurm_%A_%a.out
 #SBATCH --error=runs/slurm/nav4rail_array_%A_%a/slurm_%A_%a.err
 
 # MODELS=("mistral_7b" "llama3_8b" "qwen25_coder_7b" "gemma2_9b" "qwen25_14b") # change --array=0-4 to run all 5 models
-MODELS=("mistral_7b" "llama3_8b" "qwen25_coder_7b" "gemma2_9b")
+MODELS=("mistral_7b" "llama3_8b" "qwen25_coder_7b")
 MODEL=${MODELS[$SLURM_ARRAY_TASK_ID]}
 METHOD=${METHOD:-zero_shot}
 PROMPT_MODE=${PROMPT_MODE:-$METHOD}

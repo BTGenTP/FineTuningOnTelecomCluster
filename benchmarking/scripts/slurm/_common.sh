@@ -82,18 +82,66 @@ unset PYTHONHOME 2>/dev/null || true
 # ── Python module runtime libs (libbz2 → _bz2 → datasets import chain) ───────
 # Venv creation loads python/3.11.13 once; batch jobs otherwise skip it, and
 # stripped compute images may not ship libbz2 on the default linker path.
+# HPC Python modules typically bundle libbz2 in their own lib/ dir (next to
+# the interpreter); we add that to LD_LIBRARY_PATH with fallbacks to system
+# paths, `module load bzip2`, and finally `ldconfig -p`.
 module load python/3.11.13 2>/dev/null || true
 unset PYTHONHOME 2>/dev/null || true
-for _bz_dir in /usr/lib/x86_64-linux-gnu /usr/lib64 /lib64; do
-    if [ -f "$_bz_dir/libbz2.so.1.0" ] || [ -f "$_bz_dir/libbz2.so.1" ]; then
-        case ":${LD_LIBRARY_PATH:-}:" in *":${_bz_dir}:"*) ;; *)
-            export LD_LIBRARY_PATH="${_bz_dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+_try_libbz2_dir() {
+    [ -z "${1:-}" ] && return 1
+    if [ -f "$1/libbz2.so.1.0" ] || [ -f "$1/libbz2.so.1" ]; then
+        case ":${LD_LIBRARY_PATH:-}:" in *":${1}:"*) ;; *)
+            export LD_LIBRARY_PATH="${1}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
             ;;
         esac
-        break
+        return 0
     fi
-done
-unset _bz_dir
+    return 1
+}
+
+_libbz2_done=""
+
+# 1) Python module's own lib dir (base_prefix): HPC builds usually bundle libbz2 here.
+_py_base_prefix=$(python -c 'import sys; print(sys.base_prefix)' 2>/dev/null || true)
+if [ -n "$_py_base_prefix" ]; then
+    for _bz_dir in "$_py_base_prefix/lib" "$_py_base_prefix/lib64"; do
+        if _try_libbz2_dir "$_bz_dir"; then _libbz2_done=1; break; fi
+    done
+fi
+
+# 2) Standard system library paths.
+if [ -z "$_libbz2_done" ]; then
+    for _bz_dir in /usr/lib/x86_64-linux-gnu /usr/lib64 /lib64; do
+        if _try_libbz2_dir "$_bz_dir"; then _libbz2_done=1; break; fi
+    done
+fi
+
+# 3) Explicit bzip2 environment module.
+if [ -z "$_libbz2_done" ]; then
+    if module load bzip2 2>/dev/null; then
+        python -c "import bz2" 2>/dev/null && _libbz2_done=1
+    fi
+fi
+
+# 4) ldconfig cache (needs a path writable by the admin at image-build time).
+if [ -z "$_libbz2_done" ] && command -v ldconfig >/dev/null 2>&1; then
+    _bz_lib=$(ldconfig -p 2>/dev/null | awk '/libbz2\.so\.1/ { print $NF; exit }' || true)
+    if [ -n "$_bz_lib" ]; then
+        _bz_dir=$(dirname "$_bz_lib")
+        _try_libbz2_dir "$_bz_dir" && _libbz2_done=1
+    fi
+    unset _bz_lib
+fi
+
+if [ -z "$_libbz2_done" ]; then
+    echo "[_common.sh] WARNING: libbz2.so.1 not found on LD_LIBRARY_PATH."
+    echo "  datasets/trl imports will crash (ImportError: libbz2.so.1.0)."
+    echo "  Tried: ${_py_base_prefix:-<no base_prefix>}/lib, /usr/lib/x86_64-linux-gnu, /usr/lib64, /lib64,"
+    echo "         'module load bzip2', 'ldconfig -p'."
+fi
+unset _bz_dir _libbz2_done _py_base_prefix
+unset -f _try_libbz2_dir
 
 # ── Hugging Face token (needed for gated repos like google/gemma-2-9b-it) ─
 if [ -z "${HF_TOKEN:-}" ]; then
@@ -158,7 +206,30 @@ export WANDB_PROJECT="${WANDB_PROJECT:-nav4rail-bench}"
 ) 200>>"$VENV_DIR.lock"
 
 # ── PYTHONPATH ──────────────────────────────────────────────────────────────
-export PYTHONPATH="${PYTHONPATH:-}:${BENCH_DIR}"
+# `module load python/X.Y.Z` prepends the module's own site-packages to
+# PYTHONPATH (e.g. /projects/share/apps/python/3.11.13/lib/python3.11/
+# site-packages). That silently SHADOWS the venv's site-packages — including
+# the CC-pinned torch, pydantic, transformers, etc. — because entries on
+# PYTHONPATH take precedence over the venv's pyvenv.cfg discovery.
+# Strip any PYTHONPATH entry rooted at sys.base_prefix before appending our
+# project dir, so the venv wins.
+if [ -n "${PYTHONPATH:-}" ]; then
+    _py_base_prefix=$(python -c 'import sys; print(sys.base_prefix)' 2>/dev/null || true)
+    if [ -n "$_py_base_prefix" ]; then
+        _clean_pp=""
+        IFS=':' read -ra _pp_arr <<< "$PYTHONPATH"
+        for _entry in "${_pp_arr[@]}"; do
+            case "$_entry" in
+                "$_py_base_prefix"|"$_py_base_prefix"/*) continue ;;
+            esac
+            _clean_pp="${_clean_pp:+$_clean_pp:}$_entry"
+        done
+        export PYTHONPATH="$_clean_pp"
+        unset _clean_pp _pp_arr _entry
+    fi
+    unset _py_base_prefix
+fi
+export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}${BENCH_DIR}"
 
 # ── Diagnostic output (captured in SLURM .out) ─────────────────────────────
 echo "=== NAV4RAIL Environment ==="
