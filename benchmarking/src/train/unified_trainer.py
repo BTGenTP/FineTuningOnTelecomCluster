@@ -54,12 +54,21 @@ def train(cfg: dict) -> dict[str, Any]:
         try:
             import wandb
 
+            from src.utils.wandb_config import build_run_name_suffix, build_wandb_config
+
+            run_suffix = build_run_name_suffix()
+            base_name = f"{method}_{model_key}_{peft_method}"
+            run_name = f"{base_name}_{run_suffix}" if run_suffix else base_name
+            tags = [method, model_key, peft_method, f"phase_{phase}", "train"]
+            if run_suffix:
+                tags.append(f"run_{run_suffix}")
+
             wandb.init(
                 project=wandb_project,
                 entity=wandb_entity,
-                config=cfg,
-                name=f"{method}_{model_key}_{peft_method}",
-                tags=[method, model_key, peft_method, f"phase_{phase}"],
+                config=build_wandb_config(cfg, job_type="training"),
+                name=run_name,
+                tags=tags,
                 group=os.environ.get("WANDB_RUN_GROUP") or f"train_{method}",
                 job_type="training",
             )

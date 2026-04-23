@@ -70,12 +70,28 @@ def _init_wandb_for_eval(cfg: dict, adapter_path: str | None) -> tuple[Any, bool
     run_name = f"{run_kind}_{model_key}"
     if constraint_mode != "none":
         run_name = f"{run_name}_{constraint_mode}"
+
+    from src.utils.wandb_config import build_run_name_suffix, build_wandb_config
+
+    run_suffix = build_run_name_suffix()
+    if run_suffix:
+        run_name = f"{run_name}_{run_suffix}"
+
     tags = [
         "eval", model_key, prompt_mode, peft_method, f"phase_{phase}",
         f"constraint_{constraint_mode}",
     ]
     if adapter_path:
         tags.append("adapter")
+    if run_suffix:
+        tags.append(f"run_{run_suffix}")
+
+    enriched_cfg = {
+        **cfg,
+        "adapter_path": adapter_path,
+        "prompt_mode": prompt_mode,
+        "constraint_mode": constraint_mode,
+    }
 
     try:
         wandb.init(
@@ -85,12 +101,7 @@ def _init_wandb_for_eval(cfg: dict, adapter_path: str | None) -> tuple[Any, bool
             tags=tags,
             group=os.environ.get("WANDB_RUN_GROUP") or f"eval_{method}_{constraint_mode}",
             job_type="inference_constrained" if constraint_mode != "none" else "inference_baseline",
-            config={
-                **cfg,
-                "adapter_path": adapter_path,
-                "prompt_mode": prompt_mode,
-                "constraint_mode": constraint_mode,
-            },
+            config=build_wandb_config(enriched_cfg, job_type="inference"),
         )
     except Exception as e:  # noqa: BLE001
         logger.warning("wandb.init failed (%s) — continuing without tracking", e)
@@ -101,12 +112,18 @@ def _init_wandb_for_eval(cfg: dict, adapter_path: str | None) -> tuple[Any, bool
 
 def _generate_xml(
     model, tokenizer, prompt, eval_cfg: dict, constraint=None,
-) -> tuple[str, float, int]:
-    """Generate XML from prompt, return (xml_str, latency_s, n_tokens).
+) -> tuple[str, float, int, str | None]:
+    """Generate XML from prompt, return (xml_str, latency_s, n_tokens, error).
 
     `constraint` is an optional `ConstraintHandle` (from src.eval.constrained).
     When active, its LogitsProcessor is merged into generate kwargs; if the
     backend emits JSON (Outlines JSON-mode), its post-processor converts to XML.
+
+    On grammar-constrained failures (tokenizer/vocab mismatch, empty-stack
+    violations, slow FSM timeouts), returns ("", latency, 0, error_message) so
+    the benchmark keeps running for the remaining missions instead of aborting
+    the whole SLURM job. The error is surfaced per-mission in
+    ``detailed_results[...]["generation_error"]``.
     """
     import torch
 
@@ -142,8 +159,31 @@ def _generate_xml(
         apply_to_generate_kwargs(gen_kwargs, constraint)
 
     t0 = time.time()
-    with torch.no_grad():
-        outputs = model.generate(**inputs, **gen_kwargs)
+    try:
+        with torch.no_grad():
+            outputs = model.generate(**inputs, **gen_kwargs)
+    except AssertionError as e:
+        # transformers-cfg asserts `acceptance_vocab_size < masked_logits_vocab_size`
+        # at every decoding step. Llama3 fast tokenizers report a larger vocab
+        # than the model's logits (added tokens vs config.vocab_size) and trip it
+        # on the very first token. Mark the model as incompatible with GBNF and
+        # let the rest of the benchmark proceed — the alternative is aborting
+        # after mission 0 on a 100-mission run.
+        logger.warning(
+            "Grammar backend assertion failure (likely vocab mismatch): %s", e,
+        )
+        return "", time.time() - t0, 0, f"grammar_assertion: {e}"
+    except ValueError as e:
+        # transformers-cfg raises ValueError("All stacks are empty…") when the
+        # grammar reaches a terminal state but the model keeps sampling. Seen
+        # mid-run on Mistral (~60/100) — the benchmark should record a 0 for
+        # that mission, not die.
+        msg = str(e)
+        if "stacks are empty" in msg or "not accepted by the grammar" in msg:
+            logger.warning("Grammar backend rejected a token mid-generation: %s", msg)
+            return "", time.time() - t0, 0, f"grammar_rejected: {msg[:160]}"
+        raise
+
     latency = time.time() - t0
 
     new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
@@ -156,7 +196,7 @@ def _generate_xml(
     else:
         xml_str = raw
 
-    return xml_str, latency, n_tokens
+    return xml_str, latency, n_tokens, None
 
 
 def run_benchmark(
@@ -274,12 +314,14 @@ def run_benchmark(
     all_metrics = []
     detailed_results = []
 
+    n_generation_errors = 0
     for i, mission_data in enumerate(test_missions):
         mission_text = mission_data["mission"]
         category = mission_data["category"]
         mission_id = mission_data["id"]
 
         agent_meta: dict[str, Any] = {}
+        generation_error: str | None = None
 
         if agent is not None:
             agent_result = agent.run(mission_text)
@@ -306,9 +348,11 @@ def run_benchmark(
             )
 
             # Generate (constraint may be None for baseline)
-            xml_str, latency_s, n_tokens = _generate_xml(
+            xml_str, latency_s, n_tokens, generation_error = _generate_xml(
                 model, tokenizer, prompt, eval_cfg, constraint=constraint,
             )
+            if generation_error:
+                n_generation_errors += 1
 
         # Optionally enrich ports
         if eval_cfg.get("enrich_ports", True):
@@ -331,6 +375,7 @@ def run_benchmark(
             "xml": xml_str,
             **asdict(metrics),
             **agent_meta,
+            "generation_error": generation_error,
         })
 
         # Stream per-sample metrics to W&B (lightweight: no raw XML to avoid cost)

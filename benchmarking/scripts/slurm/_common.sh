@@ -85,16 +85,55 @@ unset PYTHONHOME 2>/dev/null || true
 # HPC Python modules typically bundle libbz2 in their own lib/ dir (next to
 # the interpreter); we add that to LD_LIBRARY_PATH with fallbacks to system
 # paths, `module load bzip2`, and finally `ldconfig -p`.
+#
+# CPython 3.11 from python.org / HPC stacks links `_bz2` against the exact
+# SONAME `libbz2.so.1.0` (legacy). Modern distros (Ubuntu 22.04+) ship only
+# `libbz2.so.1.0.<X>` under a `libbz2.so.1` symlink. Adding the directory to
+# LD_LIBRARY_PATH is NOT enough — the loader still fails on the missing
+# `.1.0` alias. We therefore materialise a user-local shim into the venv's
+# own lib/ so the interpreter's own linker sees the legacy SONAME.
 module load python/3.11.13 2>/dev/null || true
 unset PYTHONHOME 2>/dev/null || true
 
+_SHIM_DIR="$VENV_DIR/lib/nav4rail_shims"
+mkdir -p "$_SHIM_DIR"
+case ":${LD_LIBRARY_PATH:-}:" in *":${_SHIM_DIR}:"*) ;; *)
+    export LD_LIBRARY_PATH="${_SHIM_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    ;;
+esac
+
+_ensure_libbz2_alias() {
+    # If `libbz2.so.1.0` is missing from $1 but `libbz2.so.1` (or libbz2.so.1.0.X)
+    # is present, drop a symlink into $_SHIM_DIR pointing at the real file.
+    local dir="$1" real=""
+    [ -d "$dir" ] || return 1
+    if [ -f "$dir/libbz2.so.1.0" ]; then
+        real="$dir/libbz2.so.1.0"
+    elif [ -f "$dir/libbz2.so.1" ]; then
+        real="$dir/libbz2.so.1"
+    else
+        real=$(ls "$dir"/libbz2.so.1.0.* 2>/dev/null | head -1 || true)
+        [ -z "$real" ] && real=$(ls "$dir"/libbz2.so.* 2>/dev/null | head -1 || true)
+    fi
+    [ -z "$real" ] && return 1
+    if [ ! -e "$_SHIM_DIR/libbz2.so.1.0" ]; then
+        ln -sf "$real" "$_SHIM_DIR/libbz2.so.1.0"
+    fi
+    if [ ! -e "$_SHIM_DIR/libbz2.so.1" ]; then
+        ln -sf "$real" "$_SHIM_DIR/libbz2.so.1"
+    fi
+    return 0
+}
+
 _try_libbz2_dir() {
     [ -z "${1:-}" ] && return 1
-    if [ -f "$1/libbz2.so.1.0" ] || [ -f "$1/libbz2.so.1" ]; then
+    if [ -f "$1/libbz2.so.1.0" ] || [ -f "$1/libbz2.so.1" ] \
+       || ls "$1"/libbz2.so.1.0.* >/dev/null 2>&1; then
         case ":${LD_LIBRARY_PATH:-}:" in *":${1}:"*) ;; *)
             export LD_LIBRARY_PATH="${1}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
             ;;
         esac
+        _ensure_libbz2_alias "$1" || true
         return 0
     fi
     return 1
@@ -112,7 +151,7 @@ fi
 
 # 2) Standard system library paths.
 if [ -z "$_libbz2_done" ]; then
-    for _bz_dir in /usr/lib/x86_64-linux-gnu /usr/lib64 /lib64; do
+    for _bz_dir in /usr/lib/x86_64-linux-gnu /usr/lib64 /lib64 /usr/lib; do
         if _try_libbz2_dir "$_bz_dir"; then _libbz2_done=1; break; fi
     done
 fi
@@ -120,7 +159,10 @@ fi
 # 3) Explicit bzip2 environment module.
 if [ -z "$_libbz2_done" ]; then
     if module load bzip2 2>/dev/null; then
-        python -c "import bz2" 2>/dev/null && _libbz2_done=1
+        # Rescan common locations after the module appended its own prefix.
+        for _bz_dir in $(echo "${LD_LIBRARY_PATH:-}" | tr ':' ' '); do
+            _try_libbz2_dir "$_bz_dir" && _libbz2_done=1 && break
+        done
     fi
 fi
 
@@ -134,14 +176,21 @@ if [ -z "$_libbz2_done" ] && command -v ldconfig >/dev/null 2>&1; then
     unset _bz_lib
 fi
 
-if [ -z "$_libbz2_done" ]; then
-    echo "[_common.sh] WARNING: libbz2.so.1 not found on LD_LIBRARY_PATH."
-    echo "  datasets/trl imports will crash (ImportError: libbz2.so.1.0)."
-    echo "  Tried: ${_py_base_prefix:-<no base_prefix>}/lib, /usr/lib/x86_64-linux-gnu, /usr/lib64, /lib64,"
-    echo "         'module load bzip2', 'ldconfig -p'."
+# Final sanity probe: if the shim directory has an alias but `python -c "import bz2"`
+# still fails, surface a clearer error than "ImportError: libbz2.so.1.0" in job logs.
+if ! python -c "import bz2" 2>/dev/null; then
+    echo "[_common.sh] WARNING: 'python -c \"import bz2\"' failed."
+    echo "  Tried:"
+    echo "    - ${_py_base_prefix:-<no base_prefix>}/lib{,64}"
+    echo "    - /usr/lib/x86_64-linux-gnu, /usr/lib64, /lib64, /usr/lib"
+    echo "    - 'module load bzip2'"
+    echo "    - 'ldconfig -p'"
+    echo "  Shim dir: $_SHIM_DIR (contents:)"
+    ls -la "$_SHIM_DIR" 2>/dev/null || true
+    echo "  Effective LD_LIBRARY_PATH: ${LD_LIBRARY_PATH:-<unset>}"
 fi
-unset _bz_dir _libbz2_done _py_base_prefix
-unset -f _try_libbz2_dir
+unset _bz_dir _libbz2_done _py_base_prefix _SHIM_DIR
+unset -f _try_libbz2_dir _ensure_libbz2_alias
 
 # ── Hugging Face token (needed for gated repos like google/gemma-2-9b-it) ─
 if [ -z "${HF_TOKEN:-}" ]; then

@@ -20,12 +20,13 @@ MODEL=${MODEL:-mistral_7b}
 CONFIG=${CONFIG:-configs/base.yaml}
 PROMPT_MODE=${PROMPT_MODE:-zero_shot}
 ADAPTER=${ADAPTER:-}
+CONSTRAINT=${CONSTRAINT:-none}
 
 echo "=== NAV4RAIL Evaluation ==="
 echo "Model:       ${MODEL}"
 echo "Prompt mode: ${PROMPT_MODE}"
 echo "Adapter:     ${ADAPTER:-<none>}"
-
+echo "Constraint:  ${CONSTRAINT}"
 # ── Common setup (venv, PYTHONPATH, diagnostics) ────────────────────────────
 # Slurm executes a copy in /var/spool/slurmd/...; SLURM_SUBMIT_DIR is the dir where sbatch ran.
 if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -r "${SLURM_SUBMIT_DIR}/scripts/slurm/_common.sh" ]; then
@@ -37,7 +38,7 @@ else
 fi
 
 # ── Run directory ───────────────────────────────────────────────────────────
-RUN_DIR="runs/slurm/nav4rail_eval_${PROMPT_MODE}_${MODEL}_${SLURM_JOB_ID}"
+RUN_DIR="runs/slurm/nav4rail_eval_${PROMPT_MODE}_${CONSTRAINT}_${MODEL}_${SLURM_JOB_ID}"
 mkdir -p "$RUN_DIR"
 
 export WANDB_PROJECT=nav4rail-bench
@@ -53,6 +54,7 @@ python -m src.eval.benchmark \
     --config "$CONFIG" \
     --model "$MODEL" \
     --prompt-mode "$PROMPT_MODE" \
+    --constraint "$CONSTRAINT" \
     $ADAPTER_FLAG \
     --output "$RUN_DIR/" \
     2>&1 | tee "$RUN_DIR/eval.log"

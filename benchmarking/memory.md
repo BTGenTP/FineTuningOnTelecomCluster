@@ -58,6 +58,22 @@ Multi-LLM benchmarking platform for BehaviorTree XML generation, targeting SNCF 
 - **SBATCH partition**: `${PARTITION:-P100}` not expanded by SLURM — replaced with literal values
 - **Missing pyyaml**: Venv created without `pip install -r requirements.txt` — added bootstrap logic to all SLURM scripts
 - **Git worktree on WSL**: `safe.directory` warning — use `git -c safe.directory='*'`
+- **libbz2.so.1.0 ImportError (SFT, 2026-04-23)**: CPython `_bz2` links against the legacy SONAME `libbz2.so.1.0`; modern systems only ship `libbz2.so.1`. `scripts/slurm/_common.sh` now creates a per-venv shim dir `$VENV_DIR/lib/nav4rail_shims/` with `libbz2.so.1.0 -> real_libbz2.so` and prepends it to `LD_LIBRARY_PATH`. Ends with `python -c "import bz2"` sanity check.
+- **GBNF `AssertionError` on Llama3 (2026-04-23)**: `transformers_cfg` asserts `tokenizer_vocab < model_vocab` every decoding step; Llama3 fast tokenizer reports added tokens beyond `config.vocab_size` → trips on token 0. `src/eval/benchmark.py::_generate_xml` now catches it, returns `("", latency, 0, "grammar_assertion: …")`, benchmark continues with score 0 for that mission.
+- **GBNF `All stacks are empty` on Mistral (2026-04-23)**: Grammar reaches terminal state but model keeps sampling; crashed at 60/100. Same `_generate_xml` catch handles `ValueError` with `"stacks are empty"` or `"not accepted by the grammar"`.
+- **Gemma2 9B GBNF timeout (unfixed)**: GBNF FSM is fundamentally slow on 9B models — no benchmark.py change helps. Either extend SLURM `--time` past 08:00:00 or skip Gemma2 for the GBNF axis.
+
+## W&B Schema (cleaned 2026-04-23)
+The raw cfg dumped by `wandb.init(config=cfg, ...)` polluted the runs table: every run held all 5 models' registry, both SLURM and vast.ai compute blocks, plus `compute.default_backend="slurm"` even on vast.ai runs.
+
+`src/utils/wandb_config.py::build_wandb_config(cfg, job_type)` rewrites the config:
+- **Model registry collapsed**: only the active model appears, flattened to `model.*` (no more `models.mistral_7b.*`, `models.llama3_8b.*`, … on every row)
+- **Compute collapsed**: `compute.backend` = `"slurm"|"vastai"|"local"` (detected via `SLURM_JOB_ID` / `VAST_CONTAINERLABEL` / cwd), `compute.backend_config.*` only for the active backend
+- **Method-specific blocks pruned**: `grpo`, `dpo`, `kto`, `pot`, `react_agent` stripped unless `training.method` matches
+- **`runtime.*` block added**: `job_type` (`training|inference`), `execution_backend`, `hostname`, `gpu_name`, `slurm_job_id`, `slurm_array_ref` (e.g. `123456_2`), `slurm_array_job_id`, `slurm_array_task_id`, `slurm_job_name`, `slurm_partition`. The SLURM array ref matches the output dir suffix in `array_models.sh`.
+- **Run name + tags**: `build_run_name_suffix()` appends the SLURM array ref (or job id, or vast label) to both the W&B run name and the tags (`run_<ref>`) so every row in the table points back to an exact compute job. Tags also gain `"train"` / `"eval"` markers (job_type is set separately but not indexable as a column).
+
+Wired into `src/train/unified_trainer.py` (line ~60) and `src/eval/benchmark.py::_init_wandb_for_eval` (line ~88).
 
 ## Cluster Info
 - **SSH host**: `gpu` (gpu-gw.enst.fr, user latoundji-25)
