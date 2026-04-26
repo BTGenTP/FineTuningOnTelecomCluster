@@ -1,12 +1,16 @@
 """
-ReAct / Reflexion agent for NAV4RAIL code generation.
-=====================================================
+ReAct / Reflexion PoT agent for NAV4RAIL — iterative code generation.
+=====================================================================
 
-Iterative Code-as-Reasoning loop. The LLM writes a Python script against the
-MissionBuilder API, the sandbox executes it, and the validator scores the
-resulting XML. If the score is below the target threshold (or execution
-failed), the error feedback is appended to the prompt and the LLM retries
-until either the target score is reached or `max_iterations` is hit.
+Iterative Code-as-Reasoning loop (Program-of-Thoughts variant). The LLM writes
+a Python script against the MissionBuilder API, the sandbox executes it, and
+the validator scores the resulting XML. If the score is below the target
+threshold (or execution failed), the error feedback is appended to the prompt
+and the LLM retries until either the target score is reached or
+`max_iterations` is hit.
+
+For direct XML inference (no intermediate Python code), see
+`src/agents/react_base_agent.py` (`ReActBaseAgent`).
 
 Implementation: LangGraph state machine with four nodes:
 
@@ -73,10 +77,11 @@ class ReActState(TypedDict, total=False):
 # ── Node functions (pure-ish; mutate state in place for LangGraph) ───────────
 
 
-class ReActAgent:
+class ReActPoTAgent:
     """
-    ReAct / Reflexion agent. Iterates generate→execute→validate→reflect until
-    the validation score hits `target_score` or `max_iterations` is exhausted.
+    ReAct / Reflexion PoT agent. Iterates generate_code→execute→validate→reflect
+    until the validation score hits `target_score` or `max_iterations` is
+    exhausted. The LLM writes Python (PoT); the sandbox produces the XML.
     """
 
     def __init__(
@@ -146,7 +151,7 @@ class ReActAgent:
         state["iteration"] = state.get("iteration", 0) + 1
 
         prompt = build_prompt(
-            mode="react_agent",
+            mode="react_pot_agent",
             mission=state["mission"],
             model_config=self.model_config,
             catalog=self.catalog,

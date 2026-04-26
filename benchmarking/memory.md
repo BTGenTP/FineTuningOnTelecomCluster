@@ -139,3 +139,166 @@ Compare Baseline vs GBNF vs Outlines on the same 100 test missions, same seed, s
 ### Reproducibility hashes (log to W&B and metrics.json every run)
 - `seed`, sha256 of `test_missions.json`, `skills_catalog.yaml`, `bt_grammar.gbnf`
 - `constraint_mode`, versions of `transformers-cfg` / `outlines` / `torch` / `transformers`
+
+## Related Work — BTGenBot (Izzo et al., 2024) — analyse 2026-04-26
+
+### Référence
+Izzo, R. A., Bardaro, G., & Matteucci, M. (2024). BTGenBot: Behavior Tree Generation for Robotic Tasks with Lightweight LLMs. arXiv:2403.12761. Politecnico di Milano.
+
+### Faits clés
+- **Modèles** : Llama-2-7B, Llama-2-7B-Chat, CodeLlama-7B-Instruct
+- **Méthode** : SFT-LoRA en 2 étapes (Alpaca instruction-tuning → 600 BTs). MLPs `[gate_proj, up_proj, down_proj]` débloqués. LR 3e-4, batch 256/micro-batch 4.
+- **Dataset** : 600 BTs **réutilisés depuis Ghzouli et al. (2023)** — projets ROS open-source. NL générée par GPT-3.5-turbo (context 2048), validation manuelle d'une dizaine d'échantillons. Format Alpaca 3-champs.
+- **Résultats** : 71-86 % syntax post-FT vs 0-28 % base ; 88.9 % syntax avec one-shot LlamaChat ; 5/9 tasks en simulation après nettoyage statique.
+- **Limites** : hallucinations de ports, échec sur control flow complexe, validateur "compare-only".
+
+### Comparaison avec NAV4RAIL (table dans PLAN.md §1.8)
+- **Catalogue** : BTGenBot ouvert ~10 actions, NAV4RAIL fermé 28 skills typés
+- **Safety rules** : BTGenBot 0, NAV4RAIL 27 (SR-001..SR-027)
+- **Validation** : BTGenBot compare-only, NAV4RAIL 5-niveaux génératifs
+- **Dataset** : BTGenBot 600 mining + NL noisy, NAV4RAIL 2000 MissionBuilder valide-par-construction
+
+## Décision — Stratégie de mining open-source (2026-04-26)
+
+### Question initiale
+Utiliser la stratégie BTGenBot (BTs open-source + alignement NL) pour NAV4RAIL ?
+
+### Décision
+**Le pipeline `MissionBuilder` synthétique reste le SIGNAL PRINCIPAL.** Le mining open-source est ajouté en **Stage 0 OPTIONNEL** (continued pretraining grammar-only), conditionné à un trigger mesurable :
+> Activer ssi mean_score SFT < 0.85 ET déficit de diversité structurelle (entropie de branching, distribution profondeur, ratio Sequence/Fallback).
+
+### Justification
+1. Vocabulaire NAV4RAIL (LoadMission, ProjectPointOnNetwork, …) **n'existe dans aucun corpus public** → mapping many-to-zero, pas une "normalisation".
+2. Patterns SR-023..027 (autoremap `[*]`, multi-subtree, add_execute auto-registre) **absents des BTs publics** → MissionBuilder est plus contraint que tout corpus open-source.
+3. Sans mitigation, fine-tuning sur corpus public **dégrade** le taux d'hallucination.
+4. BTGenBot's validateur "compare-only" est strictement inférieur à votre `validate_bt.py` 5-niveaux.
+
+### Pipeline retenu (PLAN.md §2.2)
+```
+Stage 0 (OPT, Phase 0.5)  Continued pretraining XML brut
+    Corpus  : gitlab.com/nav4rail/behavior_trees (P0) + Ghzouli (2023) + Nav2
+    Mitigation contamination : masquage skill IDs OU tag domaine [generic]/[nav4rail]
+    Méthode : QLoRA, MLPs débloqués (à la BTGenBot), 1-2 epochs, LR=1e-5
+
+Stage 1   SFT MissionBuilder (INCHANGÉ — dataset_sft.jsonl)
+Stage 2   DPO/GRPO sur validate_bt (INCHANGÉ)
+Inférence : retrieval-augmented few-shot k=1..3 sur BT ground truth ferroviaire
+```
+
+### Action prioritaire P0
+**Inventaire `gitlab.com/nav4rail/behavior_trees`** — seul corpus dont le domaine est aligné. Tout le reste apporte de la grammaire BTCPP v4, pas du contenu ferroviaire.
+
+### Action P1 — Génération NL renforcée (vs BTGenBot naïf)
+Si Stage 0 activé :
+1. NL générée par modèle fort (Claude Sonnet / GPT-4)
+2. **Cycle-consistency** : NL → PoT agent → BT reconstruit → TED(source, reconstruit) < 15 % de la profondeur
+3. Classification automatique dans une des 8 catégories de mission ; drop si non-classifiable
+4. 3 paraphrases / BT (opérateur / technique / directive)
+
+### Mises à jour PLAN.md
+- §1.8 — Travaux apparentés BTGenBot (résumé + table comparative)
+- §2.2 — Stratégie alternative corpus open-source (proposition révisée + sources concrètes + protocole NL cycle-consistency)
+- §3 Phase optionnelle — Stage 0 ajouté avec sous-tâches conditionnelles
+
+## Inventaire BT corpus local (2026-04-26)
+
+### Source
+`nav4rails_repo/behavior_trees/` (mirror local de `gitlab.com/nav4rail/behavior_trees`). 19 fichiers `.behaviortreeschema` (= BTCPP-XML pur, juste l'extension Sirius/Obeo). Décomposition multi-subtree de 2 missions ground truth (real + simulation), pas un corpus de mining.
+
+### Outil
+`scripts/inventory_bt_corpus.py` (générique, paramètre `--catalog` croise avec `skills_catalog.yaml`).
+- Sortie : `<out>.jsonl` (per-file), `<out>.md` (rapport human-readable), `<out>.summary.json` (agrégats globaux)
+- Run local : `runs/local/bt_inventory_local_2026-04-26.{jsonl,md,summary.json}`
+
+### Résultats clés
+- **19/19 fichiers parsent** OK ; profondeur 2-4 (mean=3.0) ; mean branching=3.64 ; 6/19 utilisent autoremap, 7/19 ont une boucle Repeat
+- **Catalog coverage : 96.4 %** (27/28 skills utilisés)
+- **GAP CRITIQUE** : 3 skills présents dans corpus, ABSENTS du catalogue → MissionBuilder ne peut pas générer `simulation_inspection_mission` :
+  - `ChangeSimulationStatus`
+  - `FinalizeAndPublishGraphicalPathDescription`
+  - `PassGraphicalPreliminaryPathDescription`
+- **Skill catalogue inutilisé** : `SimulationStarted` (présent dans `data/skills_catalog.yaml`, jamais utilisé dans les BTs réels)
+- Control nodes : Sequence (71), Fallback (21), Repeat (9), ReactiveFallback (3)
+- Top skills : `CheckCurrentStepType`, `PassMotionParameters`, `UpdateCurrentExecutedStep` (40 chacun, présents dans tous les motion subtrees)
+
+### Action immédiate
+Compléter `data/skills_catalog.yaml` avec les 3 skills manquants (déterminer leur famille, ports, prerequisites en regardant les BTs) ; statuer sur `SimulationStarted` (garder ou retirer).
+
+## Refactor agents (2026-04-26)
+
+### Renommage : react_agent → react_pot_agent
+- `src/agents/react_agent.py` → `src/agents/react_pot_agent.py` (`ReActAgent` → `ReActPoTAgent`)
+- `configs/methods/react_agent.yaml` → `configs/methods/react_pot_agent.yaml`
+- Bloc `react_agent:` dans `configs/base.yaml` → `react_pot_agent:`
+- CLI : `--prompt-mode react_agent` → `--prompt-mode react_pot_agent`
+- Mode prompt_builder : `react_agent` → `react_pot_agent`
+- Références mises à jour dans : `src/agents/__init__.py`, `src/eval/benchmark.py`, `src/utils/wandb_config.py`, `src/data/prompt_builder.py`
+
+### Nouveau : ReActBaseAgent (inférence XML directe)
+- `src/agents/react_base_agent.py` — boucle `generate_xml → validate → reflect`, LangGraph + fallback Python pur
+- Pas de sandbox, pas de Python intermédiaire — l'LLM émet directement `<root>...</root>`
+- `inner_prompt_mode` configurable : `zero_shot | few_shot | schema_guided | chain_of_thought` (délègue à `build_prompt(inner_mode)` puis ajoute un footer de refinement à partir du dernier `(xml, score, errors)`)
+- `use_constraint: true` honore `eval.constraint.mode` (gbnf / outlines / none) — réutilise `src.eval.constrained.apply_to_generate_kwargs`
+- Catch GBNF assertion + `stacks are empty` (parité avec `_generate_xml`)
+- Choix de modèle : standard via `model.key` dans `base.yaml` — agent reçoit `(model, tokenizer, model_config)` injectés
+- Bloc config : `react_base_agent:` dans `base.yaml` + `configs/methods/react_base_agent.yaml`
+- CLI : `python -m src.eval.benchmark --config configs/base.yaml --prompt-mode react_base_agent [--constraint gbnf|outlines|none]`
+- Dispatcher dans `benchmark.py::run_benchmark` : `training_method == "react_base_agent"` instancie `ReActBaseAgent(constraint=constraint, eval_cfg=eval_cfg)`
+
+## Décisions stratégiques (2026-04-26)
+
+### Q3 — Inclusion du code MissionBuilder dans le dataset SFT
+**Décision** : NE PAS inclure le code comme cible SFT principale. Approche hybride retenue :
+- Cible SFT principale = `mission → xml` (inchangé)
+- Format CoT enrichi optionnel : `mission → reasoning + code_sketch + xml` — le code MissionBuilder sert de scratchpad explicite des patterns SR-023..027 ; à l'inférence on parse l'XML et on jette le reste
+- Few-shot pur (PoT/code) reste pertinent pour OOD via `react_base_agent inner_prompt_mode=few_shot` ou `react_pot_agent`
+
+**Pourquoi** : double cible (XML+code) crée un conflit de signal. Le code en CoT-scratchpad capture les patterns sans déplacer la cible finale. Évite la dépendance sandbox au déploiement.
+
+### Q5 — Fine-tuning en 2 stages (corpus publics → catalogue interne)
+**Décision** : Pipeline en 4 stages, Stage 0a/0b conditionnels :
+
+```
+[opt] Stage 0a — Continued pretraining XML masked (skill IDs → ACTION_*/COND_*)
+                 1-2 epochs, LR=1e-5, MLPs débloqués (à la BTGenBot)
+[opt] Stage 0b — Continued pretraining MissionBuilder API code (lié à Q3)
+      Stage 1  — SFT mission → CoT-code-sketch → XML (cible XML)
+      Stage 2  — DPO/GRPO/SDPO sur validate_bt rich feedback
+```
+
+**Conditions d'activation Stage 0** :
+1. `mean_score` SFT direct (Stage 1 seul) < 0.85 ; ET
+2. Mesure de perplexity zero-shot AVANT/APRÈS Stage 0 sur 50 BTs valides → si perplexity AUGMENTE après, REVERT (catastrophic forgetting)
+
+### Q6 — SDPO (Self-Distillation Iterated DPO) + Rich Feedback
+**Décision** : Ajouter SDPO en Phase 3 comme **complément** à GRPO (pas remplacement). Nouveau trainer `src/train/sdpo_trainer.py`.
+
+**Pipeline SDPO** :
+```
+Cycle × 1-2 :
+  1. Modèle SFT génère N=8 candidats / mission (T=0.8, top_p=0.9)
+  2. validate_bt rich feedback (parse, structure, sémantique, cohérence, hallucination)
+  3. Top-K (score > 0.9) → chosen ; bottom-K (score < 0.5) → rejected
+     (perturbation programmatique en backup si diversité insuffisante)
+  4. DPOTrainer refine
+  5. Le modèle DPO devient le générateur de l'itération suivante
+```
+
+**Critique de "rich feedback"** : DPO classique binarise (chosen/rejected) → perd l'info des 5 composantes de score. Mitigations :
+- **Multi-pair DPO** : K paires (chosen_i, rejected_j) par mission au lieu d'1
+- **Stepwise DPO** : paires sur sous-arbres au lieu de missions complètes
+- **KTO pondéré** : labels binaires + poids = `|score - threshold|`
+
+**Comparaison à mener (ablation Phase 3)** :
+- GRPO seul, SDPO seul, SDPO → GRPO (séquence)
+- Hyperparamètres SDPO : β ∈ {0.1, 0.3, 0.5}, K ∈ {2, 4, 8}, n_iterations ∈ {1, 2, 3}
+- Métriques : `mean_score`, `perfect_rate`, `steps_to_convergence`, `validity_rate`, OOD robustness (5 missions ambiguës)
+
+### Différences pratiques GRPO vs SDPO (référence rapide)
+| Critère | GRPO | SDPO |
+|---|---|---|
+| Paires | Non (advantage normalisé groupe) | Oui (chosen/rejected) |
+| Policy | On-policy | Off-policy |
+| Stabilité | Sensible à β KL | Plus stable mais sur-fit possible |
+| VRAM | Plus élevé | Plus faible |
+| Convergence | Plus lente, signal continu | Plus rapide, plateau plus haut |

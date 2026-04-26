@@ -54,7 +54,7 @@ def _init_wandb_for_eval(cfg: dict, adapter_path: str | None) -> tuple[Any, bool
     prompt_mode = (
         method if method in (
             "zero_shot", "few_shot", "schema_guided", "chain_of_thought",
-            "pot", "react_agent",
+            "pot", "react_pot_agent", "react_base_agent",
         )
         else "zero_shot"
     )
@@ -247,7 +247,7 @@ def run_benchmark(
     training_method = cfg.get("training", {}).get("method", "sft")
     if training_method in (
         "zero_shot", "few_shot", "schema_guided", "chain_of_thought",
-        "pot", "react_agent",
+        "pot", "react_pot_agent", "react_base_agent",
     ):
         prompt_mode = training_method
     else:
@@ -285,16 +285,29 @@ def run_benchmark(
             catalog=catalog,
             safety_rules=safety_rules,
         )
-    elif training_method == "react_agent":
-        from src.agents.react_agent import ReActAgent
+    elif training_method == "react_pot_agent":
+        from src.agents.react_pot_agent import ReActPoTAgent
 
-        agent = ReActAgent(
+        agent = ReActPoTAgent(
             model=model,
             tokenizer=tokenizer,
             model_config=model_config,
-            react_cfg=cfg.get("react_agent", {}),
+            react_cfg=cfg.get("react_pot_agent", {}),
             catalog=catalog,
             safety_rules=safety_rules,
+        )
+    elif training_method == "react_base_agent":
+        from src.agents.react_base_agent import ReActBaseAgent
+
+        agent = ReActBaseAgent(
+            model=model,
+            tokenizer=tokenizer,
+            model_config=model_config,
+            agent_cfg=cfg.get("react_base_agent", {}),
+            catalog=catalog,
+            safety_rules=safety_rules,
+            constraint=constraint,
+            eval_cfg=eval_cfg,
         )
 
     # Load test missions
@@ -461,7 +474,8 @@ def run_benchmark(
         "schema_guided": "schema_guided",
         "chain_of_thought": "chain_of_thought",
         "pot": "program_of_thoughts",
-        "react_agent": "react_agent",
+        "react_pot_agent": "react_pot_agent",
+        "react_base_agent": "react_base_agent",
     }
 
     # Few-shot demos live in separate chat turns; export prefix only.
@@ -558,7 +572,7 @@ def main():
     parser.add_argument("--output", default=None, help="Output directory")
     parser.add_argument("--prompt-mode", default=None,
                         choices=["zero_shot", "few_shot", "schema_guided", "chain_of_thought",
-                                 "pot", "react_agent",
+                                 "pot", "react_pot_agent", "react_base_agent",
                                  "gbnf", "outlines", "all_constraints"])
     parser.add_argument("--constraint", default=None,
                         choices=["none", "gbnf", "outlines", "all"],
@@ -570,9 +584,12 @@ def main():
     from src.utils.config import load_config
 
     # Method configs that live under configs/methods/ and should be merged via load_config.
-    # Agents (pot, react_agent) change prompt building; constraint presets
-    # (gbnf, outlines, all_constraints) only set eval.constraint.*.
-    _MERGEABLE_METHODS = ("pot", "react_agent", "gbnf", "outlines", "all_constraints")
+    # Agents (pot, react_pot_agent, react_base_agent) change prompt building;
+    # constraint presets (gbnf, outlines, all_constraints) only set eval.constraint.*.
+    _MERGEABLE_METHODS = (
+        "pot", "react_pot_agent", "react_base_agent",
+        "gbnf", "outlines", "all_constraints",
+    )
     method_override = args.prompt_mode if args.prompt_mode in _MERGEABLE_METHODS else None
     cfg = load_config(args.config, model=args.model, method=method_override)
     if args.prompt_mode:

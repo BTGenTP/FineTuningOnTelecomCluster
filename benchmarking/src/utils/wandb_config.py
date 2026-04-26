@@ -136,7 +136,8 @@ def build_wandb_config(cfg: dict, job_type: str) -> dict[str, Any]:
         ("dpo", method == "dpo"),
         ("kto", method == "kto"),
         ("pot", method == "pot"),
-        ("react_agent", method == "react_agent"),
+        ("react_pot_agent", method == "react_pot_agent"),
+        ("react_base_agent", method == "react_base_agent"),
     ):
         if not keep_when:
             out.pop(block, None)

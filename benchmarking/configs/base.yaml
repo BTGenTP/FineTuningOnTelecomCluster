@@ -211,10 +211,10 @@ pot:
   max_new_tokens: 2048
   sandbox_timeout_s: 10.0
 
-# ── ReAct / Reflexion agent (Code-as-Reasoning, iterative) ──────────────────
-# Used when training.method == "react_agent". Iterates generate → execute →
-# validate → reflect until the target score is reached or max_iterations.
-react_agent:
+# ── ReAct / Reflexion PoT agent (Code-as-Reasoning, iterative) ──────────────
+# Used when training.method == "react_pot_agent". Iterates generate_code →
+# execute → validate → reflect until target_score reached or max_iterations.
+react_pot_agent:
   temperature: 0.3
   top_p: 0.9
   max_new_tokens: 2048
@@ -222,3 +222,17 @@ react_agent:
   max_iterations: 3
   target_score: 1.0
   use_langgraph: true   # falls back to a plain Python loop if LangGraph is missing
+
+# ── ReAct base agent (direct XML inference, iterative refinement) ───────────
+# Used when training.method == "react_base_agent". Same loop shape as
+# react_pot_agent but the LLM emits XML directly (no Python intermediate).
+# Compatible with constrained decoding (GBNF / Outlines) via eval.constraint.
+react_base_agent:
+  temperature: 0.3
+  top_p: 0.9
+  max_new_tokens: 4096
+  inner_prompt_mode: "chain_of_thought"   # zero_shot | few_shot | schema_guided | chain_of_thought
+  max_iterations: 3
+  target_score: 1.0
+  use_langgraph: true
+  use_constraint: true   # honour eval.constraint (gbnf / outlines / none) when present

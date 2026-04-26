@@ -1,0 +1,33 @@
+# ReAct base agent (direct XML inference, iterative refinement, no Python intermediate)
+# ======================================================================================
+# Invoke with:
+#   python -m src.eval.benchmark --config configs/base.yaml --prompt-mode react_base_agent
+#
+# Loop : generate_xml -> validate -> reflect -> (retry if score < target_score).
+# Inner prompt mode is configurable: zero_shot | few_shot | schema_guided | chain_of_thought.
+# Constrained decoding (GBNF / Outlines) is honoured when eval.constraint.mode != "none".
+#
+# For the Python-intermediate variant, use --prompt-mode react_pot_agent.
+
+training:
+  method: "react_base_agent"
+
+react_base_agent:
+  temperature: 0.3
+  top_p: 0.9
+  max_new_tokens: 4096
+
+  # Inner prompt: how each iteration's prompt is built (before refinement footer).
+  inner_prompt_mode: "chain_of_thought"   # zero_shot | few_shot | schema_guided | chain_of_thought
+
+  # Loop control
+  max_iterations: 3       # 1 initial + up to 2 refines
+  target_score: 1.0
+  use_langgraph: true     # falls back to plain loop if langgraph isn't installed
+  use_constraint: true    # honour eval.constraint (gbnf / outlines / none)
+
+eval:
+  enrich_ports: true
+  # Optionally combine with constrained decoding:
+  # constraint:
+  #   mode: "gbnf"   # or "outlines" / "none"

@@ -1,8 +1,8 @@
 """
-NAV4RAIL code-as-reasoning agents.
+NAV4RAIL code-as-reasoning + direct-XML agents.
 
 Public API:
-    from src.agents import PoTAgent, ReActAgent, run_sandboxed
+    from src.agents import PoTAgent, ReActPoTAgent, ReActBaseAgent, run_sandboxed
 """
 
 from src.agents.sandbox import ExecutionResult, SandboxError, run_sandboxed
@@ -21,8 +21,12 @@ def __getattr__(name):
         from src.agents.pot_agent import PoTAgent
 
         return PoTAgent
-    if name == "ReActAgent":
-        from src.agents.react_agent import ReActAgent
+    if name == "ReActPoTAgent":
+        from src.agents.react_pot_agent import ReActPoTAgent
 
-        return ReActAgent
+        return ReActPoTAgent
+    if name == "ReActBaseAgent":
+        from src.agents.react_base_agent import ReActBaseAgent
+
+        return ReActBaseAgent
     raise AttributeError(f"module 'src.agents' has no attribute {name!r}")
