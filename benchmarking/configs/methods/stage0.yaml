@@ -1,0 +1,39 @@
+# Stage 0 — Continued pretraining on BT XML grammar (CONDITIONAL)
+# ================================================================
+# Activate ONLY if SFT direct (Stage 1) plateaus at mean_score < 0.85
+# AND structural diversity deficit is measured.
+#
+# Pipeline:
+#   1. python -m src.data.build_stage0_corpus --root <path> --domain nav4rail --mode tag --out data/stage0_corpus.jsonl
+#   2. python -m src.train.unified_trainer --config configs/base.yaml --method stage0
+#
+# After Stage 0, the resulting adapter is the BASE for Stage 1 (SFT). Check
+# `runs/stage0_<model>/stage0_verdict.json` — if decision=REVERT, drop the
+# adapter and skip to plain Stage 1.
+
+training:
+  method: "stage0"
+
+stage0:
+  corpus: "data/stage0_corpus.jsonl"
+  perplexity_probe: "data/stage0_perplexity_probe.jsonl"
+  perplexity_threshold_pct: 5.0   # abort if ppl rises by more than 5%
+  epochs: 2
+  lr: 1.0e-5
+  max_seq_len: 4096
+  eval_size: 0.05
+
+# BTGenBot-style: unblock the MLPs so they can absorb the grammar
+peft:
+  method: "qlora"
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+    - "k_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+  r: 16
+  alpha: 32
+  dropout: 0.05

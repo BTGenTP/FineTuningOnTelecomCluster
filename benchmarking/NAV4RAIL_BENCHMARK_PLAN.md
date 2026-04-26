@@ -374,13 +374,30 @@ Deux travaux récents valident le pattern pour les BTs :
 | Adaptation OOD | rigide (limité au train set) | bonne via reflexion | **excellente** (retrieval s'ajuste à la mission) |
 | Maturité littérature | mature (BTGenBot, etc.) | émergente (PoT/PAL/ViperGPT) | émergente (LLM-OBTEA, BETR-XP-LLM) |
 
-### 1.9.g Roadmap d'intégration (Phase 4 — facultative)
+### 1.9.g Critique de pertinence pour NAV4RAIL (2026-04-27)
 
-- [ ] Implémenter `scripts/build_skill_index.py` (FAISS, hash du catalogue)
-- [ ] Implémenter `src/agents/rag_agent.py` (`RAGAgent`, hérite de la même `AgentResult`)
-- [ ] Mode prompt `rag_agent` dans `prompt_builder.py` (3 templates : plan, retrieve-augmented, refine)
-- [ ] Bench comparatif : SFT vs PoT vs RAG sur les 100 missions, mêmes 5 modèles
-- [ ] Ablation : K (1, 3, 5, 8), embedding model (MiniLM vs mpnet vs domain-FT)
+**Reclassement** : Phase 4 facultative → **exploration future, non-implémenté dans le scope du benchmark**.
+
+**Pourquoi** :
+1. Les papiers de référence (LLM-OBTEA, BETR-XP-LLM) opèrent sur des catalogues de **plusieurs centaines de skills hétérogènes**. NAV4RAIL en a **31, fermés, formellement spécifiés**. À 31 tokens de vocabulaire, tout le schema tient en ~800 tokens — l'argument "réduction de contexte" devient marginal vs schema_guided.
+2. Le retrieval ne capture **pas les patterns SR-023..SR-027** (composition multi-subtree, autoremap `[*]`, ordre temporel). NAV4RAIL n'a pas un déficit de connaissance des skills, mais un déficit de **structure**.
+3. **Cold start des prérequis** : retrieval indépendant ramène `CreatePath` sans `ProjectPointOnNetwork`. Mitigation = graph-aware retrieval, qui devient un mini-MissionBuilder à l'inférence — duplication de code existant.
+4. **Coût** : 3 LLM calls vs 1 zero-shot, pour un gain hallucination que GBNF/Outlines apportent à coût zéro.
+
+**À garder de l'idée RAG (sous-idées récupérables)** :
+
+- **Dynamic few-shot retrieval** (déjà §1.1) : retrouver les 2-3 missions `(mission, xml)` du dataset SFT les plus proches par embedding sentence-transformers. Apporte structure ET vocabulaire d'un coup. À implémenter dans `react_base_agent.inner_prompt_mode=few_shot` avec un retriever dynamique.
+- **Grammar narrowing** : quand la mission est classifiée transport, compiler une GBNF restreinte au sous-ensemble transport. Pas de stack RAG nécessaire — variante de GBNF dynamique.
+
+**Conditions de réactivation de RAG complète** :
+- Catalogue dépasse ~80-100 skills, OU
+- Exigence d'auditabilité SNCF explicite (plausible, pas formelle aujourd'hui).
+
+### 1.9.h Roadmap résiduel (au lieu de la pipeline RAG complète)
+
+- [ ] Dynamic few-shot retrieval dans `react_base_agent` (1-2 jours, réutilise sentence-transformers)
+- [ ] Grammar narrowing par catégorie de mission (variante GBNF dynamique, optionnel)
+- [ ] Si conditions de réactivation : Phase 5 dédiée — `scripts/build_skill_index.py`, `src/agents/rag_agent.py`, ablation K et embedder
 
 ---
 

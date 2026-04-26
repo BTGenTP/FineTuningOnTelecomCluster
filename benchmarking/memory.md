@@ -348,3 +348,44 @@ Ajoutée dans PLAN.md §1.9. Pipeline : `plan → retrieve → compose → valid
 1. ~~Gap catalogue~~ DONE
 2. Stage 0 (continued pretraining sur corpus + API code, conditionnel)
 3. SDPO avec rich/text feedback : décomposition validateur (parse + structure + sémantique + cohérence + hallucination) + erreurs/warnings text disponibles **côté entraînement uniquement**, pas à l'inférence (clarification user 2026-04-27)
+
+## Implémentation 2026-04-27 — Stage 0 + SDPO + critique RAG
+
+### Stage 0 — Continued pretraining
+Fichiers ajoutés :
+- `src/data/build_stage0_corpus.py` — corpus builder, 3 modes (`tag` pour internal nav4rail, `mask` pour mining open-source, `raw` debug). Multi-source (`--extra-root --extra-domain --extra-mode`). Idempotent (sha256 dedup). Smoke-tested : 19 BTs depuis `nav4rails_repo/behavior_trees`, modes tag et mask vérifiés.
+- `src/train/stage0_trainer.py` — `Stage0TrainerWrapper`. Causal-LM training via HF `Trainer` + `DataCollatorForLanguageModeling(mlm=False)`. QLoRA + MLPs débloqués (gate/up/down_proj — comme BTGenBot). LR=1e-5, 2 epochs default. **Garde-fou perplexity** : probe AVANT/APRÈS sur held-out NAV4RAIL BTs, abort si delta > `perplexity_threshold_pct` (5% par défaut). Verdict écrit dans `runs/stage0_<model>/stage0_verdict.json`.
+- `configs/methods/stage0.yaml` — config method pour CLI `--method stage0`.
+
+Wired into `unified_trainer.TRAINERS["stage0"]`.
+
+Pipeline d'utilisation :
+```
+1. python -m src.data.build_stage0_corpus \
+     --root /home/.../nav4rails_repo/behavior_trees \
+     --domain nav4rail --mode tag \
+     --out data/stage0_corpus.jsonl
+2. python -m src.train.unified_trainer --config configs/base.yaml --method stage0
+3. Vérifier runs/stage0_<model>/stage0_verdict.json
+   - decision=accept → utiliser comme base pour Stage 1 SFT
+   - decision=REVERT → ne pas charger l'adapter, faire Stage 1 direct
+```
+
+### SDPO — Self-Distillation Iterated DPO
+Fichiers ajoutés :
+- `src/reward/rich_feedback.py` — `RichFeedback` dataclass + `compute_rich_feedback(completion, mission, catalog, weights)`. Décompose en 5 composantes (parse, structure, semantic, coherence, hallucination) + `errors_text`, `warnings_text`, `skills_used`, `hallucinated`. Méthode `to_prompt_text()` pour la version augmentée (training-time only).
+- `src/train/sdpo_trainer.py` — `SDPOTrainerWrapper`. Pipeline : sample N candidats → score rich feedback → build pairs (3 stratégies : `single`, `multi`, `augmented`) → DPOTrainer → itérer. La stratégie `augmented` ajoute le NL feedback validateur au `chosen` côté target — c'est l'incarnation du "rich/text feedback côté entraînement uniquement".
+- `configs/methods/sdpo.yaml` — n_candidates=8, K_pairs=4, β=0.1, lr=5e-6, weights conformes au PLAN §1.3.
+
+Wired into `unified_trainer.TRAINERS["sdpo"]`.
+
+### Critique RAG (pertinence pour NAV4RAIL)
+**Reclassement** : Phase 4 facultative → **exploration future, hors scope benchmark**. PLAN §1.9.g rédigé.
+
+**Verdict** : RAG est la bonne architecture pour un **agent généraliste robotique** (200+ skills hétérogènes, navigation indoor/outdoor, manipulation), pas pour un **DSL fermé à 31 tokens avec grammaire formelle**. Pour ce dernier, GBNF/Outlines + SFT/SDPO est strictement supérieur.
+
+**Sous-idées récupérables** :
+1. **Dynamic few-shot retrieval** : retrieval sur paires `(mission, xml)` du dataset SFT, pas sur descriptions de skills isolées. À implémenter dans `react_base_agent.inner_prompt_mode=few_shot` (1-2 jours).
+2. **Grammar narrowing** : GBNF restreinte par catégorie de mission une fois la mission classifiée. Pas de stack RAG.
+
+**Conditions de réactivation** : catalogue > 80-100 skills, OU exigence d'auditabilité SNCF formelle.

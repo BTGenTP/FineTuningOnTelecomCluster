@@ -24,6 +24,8 @@ TRAINERS = {
     "kto": "src.train.kto_trainer:KTOTrainerWrapper",
     "orpo": "src.train.orpo_trainer:ORPOTrainerWrapper",
     "ppo": "src.train.ppo_trainer:PPOTrainerWrapper",
+    "stage0": "src.train.stage0_trainer:Stage0TrainerWrapper",
+    "sdpo": "src.train.sdpo_trainer:SDPOTrainerWrapper",
 }
 
 

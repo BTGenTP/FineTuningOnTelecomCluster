@@ -1,0 +1,44 @@
+# SDPO — Self-Distillation Iterated DPO with rich / text feedback
+# ================================================================
+# Phase 3 alignment method. Uses the SFT-trained model as the candidate
+# generator, scores via 5-component validate_bt rich feedback, builds
+# multi-pair preferences, and runs DPO.
+#
+# Compare against GRPO on the same checkpoints.
+#
+# Invoke:
+#   python -m src.train.unified_trainer --config configs/base.yaml --method sdpo
+
+training:
+  method: "sdpo"
+
+sdpo:
+  n_candidates: 8
+  pair_strategy: "multi"        # single | multi | augmented
+  K_pairs: 4                    # number of pairs per mission for multi/augmented
+  n_iterations: 1               # outer self-distillation loop
+  missions_per_iteration: 200   # subset of dataset_sft.jsonl per iteration
+
+  sampling:
+    temperature: 0.8
+    top_p: 0.9
+    max_new_tokens: 4096
+
+  # Component weights for the rich-feedback dense score (sums to 1.0).
+  weights:
+    parse: 0.3
+    structure: 0.2
+    semantic: 0.2
+    coherence: 0.2
+    hallucination: 0.1
+
+  dpo:
+    beta: 0.1
+    lr: 5.0e-6
+    epochs: 1
+    grad_accum: 8
+    lr_scheduler: "cosine"
+
+# Start from the SFT adapter (set via CLI or override here):
+# model:
+#   adapter_path: "runs/sft_<model>/final_adapter"
