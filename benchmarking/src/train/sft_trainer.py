@@ -16,6 +16,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any
+import inspect
 
 logger = logging.getLogger(__name__)
 
@@ -92,36 +93,103 @@ class SFTTrainerWrapper:
         model_key = self.cfg.get("model", {}).get("key", "unknown")
         output_dir = f"runs/sft_{model_key}"
 
-        training_args = TrainingArguments(
-            output_dir=output_dir,
-            num_train_epochs=epochs,
-            per_device_train_batch_size=batch_size,
-            gradient_accumulation_steps=grad_accum,
-            learning_rate=train_cfg.get("lr", 2e-4),
-            lr_scheduler_type=train_cfg.get("lr_scheduler", "cosine"),
-            warmup_ratio=train_cfg.get("warmup_ratio", 0.03),
-            weight_decay=train_cfg.get("weight_decay", 0.01),
-            max_grad_norm=train_cfg.get("max_grad_norm", 0.3),
-            gradient_checkpointing=train_cfg.get("gradient_checkpointing", True),
-            optim=train_cfg.get("optim", "paged_adamw_8bit"),
-            eval_strategy=train_cfg.get("eval_strategy", "epoch"),
-            save_strategy=train_cfg.get("save_strategy", "epoch"),
-            load_best_model_at_end=train_cfg.get("load_best_model_at_end", True),
-            logging_steps=10,
-            bf16=model_config.get("bf16", True),
-            report_to=train_cfg.get("report_to", "wandb"),
-            seed=self.cfg["experiment"]["seed"],
-        )
+        seq_len = train_cfg.get("max_seq_len", 8192)
+        dataset_text_field = "text"
 
-        self.trainer = SFTTrainer(
+        # TRL >= 0.14 prefers config objects (e.g., SFTConfig). Fall back to plain
+        # transformers.TrainingArguments for older installations.
+        try:
+            from trl import SFTConfig  # type: ignore
+
+            sft_cfg_kwargs: dict[str, Any] = dict(
+                output_dir=output_dir,
+                num_train_epochs=epochs,
+                per_device_train_batch_size=batch_size,
+                gradient_accumulation_steps=grad_accum,
+                learning_rate=train_cfg.get("lr", 2e-4),
+                lr_scheduler_type=train_cfg.get("lr_scheduler", "cosine"),
+                warmup_ratio=train_cfg.get("warmup_ratio", 0.03),
+                weight_decay=train_cfg.get("weight_decay", 0.01),
+                max_grad_norm=train_cfg.get("max_grad_norm", 0.3),
+                gradient_checkpointing=train_cfg.get("gradient_checkpointing", True),
+                optim=train_cfg.get("optim", "paged_adamw_8bit"),
+                eval_strategy=train_cfg.get("eval_strategy", "epoch"),
+                save_strategy=train_cfg.get("save_strategy", "epoch"),
+                load_best_model_at_end=train_cfg.get("load_best_model_at_end", True),
+                logging_steps=10,
+                bf16=model_config.get("bf16", True),
+                report_to=train_cfg.get("report_to", "wandb"),
+                seed=self.cfg["experiment"]["seed"],
+            )
+
+            # Some TRL versions keep these on the config rather than trainer kwargs.
+            try:
+                sft_sig = inspect.signature(SFTConfig.__init__)
+                sft_params = sft_sig.parameters
+                if "max_seq_length" in sft_params:
+                    sft_cfg_kwargs["max_seq_length"] = seq_len
+                elif "max_length" in sft_params:
+                    sft_cfg_kwargs["max_length"] = seq_len
+                if "dataset_text_field" in sft_params:
+                    sft_cfg_kwargs["dataset_text_field"] = dataset_text_field
+            except Exception:
+                pass
+
+            training_args = SFTConfig(**sft_cfg_kwargs)
+        except Exception:
+            training_args = TrainingArguments(
+                output_dir=output_dir,
+                num_train_epochs=epochs,
+                per_device_train_batch_size=batch_size,
+                gradient_accumulation_steps=grad_accum,
+                learning_rate=train_cfg.get("lr", 2e-4),
+                lr_scheduler_type=train_cfg.get("lr_scheduler", "cosine"),
+                warmup_ratio=train_cfg.get("warmup_ratio", 0.03),
+                weight_decay=train_cfg.get("weight_decay", 0.01),
+                max_grad_norm=train_cfg.get("max_grad_norm", 0.3),
+                gradient_checkpointing=train_cfg.get("gradient_checkpointing", True),
+                optim=train_cfg.get("optim", "paged_adamw_8bit"),
+                eval_strategy=train_cfg.get("eval_strategy", "epoch"),
+                save_strategy=train_cfg.get("save_strategy", "epoch"),
+                load_best_model_at_end=train_cfg.get("load_best_model_at_end", True),
+                logging_steps=10,
+                bf16=model_config.get("bf16", True),
+                report_to=train_cfg.get("report_to", "wandb"),
+                seed=self.cfg["experiment"]["seed"],
+            )
+
+        # Make trainer init robust across TRL minor versions.
+        # TRL >= 0.14 renamed `tokenizer` -> `processing_class`.
+        init_kwargs: dict[str, Any] = dict(
             model=self.model,
             args=training_args,
             train_dataset=train_ds,
             eval_dataset=eval_ds,
-            tokenizer=self.tokenizer,
-            max_seq_length=train_cfg.get("max_seq_len", 8192),
-            dataset_text_field="text",
         )
+        sig = None
+        try:
+            sig = inspect.signature(SFTTrainer.__init__)
+        except Exception:
+            sig = None
+
+        if sig is not None:
+            params = sig.parameters
+            if "processing_class" in params:
+                init_kwargs["processing_class"] = self.tokenizer
+            elif "tokenizer" in params:
+                init_kwargs["tokenizer"] = self.tokenizer
+            if "max_seq_length" in params:
+                init_kwargs["max_seq_length"] = seq_len
+            elif "max_length" in params:
+                init_kwargs["max_length"] = seq_len
+            if "dataset_text_field" in params:
+                init_kwargs["dataset_text_field"] = dataset_text_field
+        else:
+            # Best guess for modern TRL
+            init_kwargs["processing_class"] = self.tokenizer
+            # Prefer putting sequence length / text field on config; don't guess kwargs.
+
+        self.trainer = SFTTrainer(**init_kwargs)
 
         logger.info("Starting SFT training...")
         result = self.trainer.train()

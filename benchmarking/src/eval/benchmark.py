@@ -219,7 +219,10 @@ def run_benchmark(
     Returns:
         Aggregated metrics dict
     """
-    from src.data.prompt_builder import build_prompt, build_system_prompt
+    from src.data.prompt_builder import (
+        build_prompt,
+        system_message_body_for_mode,
+    )
     from src.data.skills_loader import SafetyRulesLoader, SkillsCatalog
     from src.eval.metrics import aggregate_metrics, compute_all_metrics
     from src.eval.validate_bt import enrich_ports
@@ -450,7 +453,48 @@ def run_benchmark(
     out_path.mkdir(parents=True, exist_ok=True)
 
     with open(out_path / "system_prompt.txt", "w", encoding="utf-8") as f:
-        f.write(build_system_prompt(safety_rules=safety_rules).rstrip() + "\n")
+        f.write(system_message_body_for_mode(prompt_mode, safety_rules).rstrip() + "\n")
+
+    _EXPORT_MISSION_PH = "__RUN_PROMPT_EXPORT_MISSION_PLACEHOLDER__"
+    _PROMPT_MODE_TO_BUILD: dict[str, str] = {
+        "few_shot": "few_shot",
+        "schema_guided": "schema_guided",
+        "chain_of_thought": "chain_of_thought",
+        "pot": "program_of_thoughts",
+        "react_agent": "react_agent",
+    }
+
+    # Few-shot demos live in separate chat turns; export prefix only.
+    if prompt_mode == "few_shot":
+        probe = build_prompt(
+            mode="few_shot",
+            mission=_EXPORT_MISSION_PH,
+            model_config=model_config,
+            catalog=catalog,
+            safety_rules=safety_rules,
+        )
+        if isinstance(probe, list) and len(probe) >= 2:
+            with open(out_path / "few_shot_prefix_messages.json", "w", encoding="utf-8") as f:
+                json.dump(probe[:-1], f, indent=2, ensure_ascii=False)
+        elif isinstance(probe, str):
+            with open(out_path / "few_shot_string_prompt_template.txt", "w", encoding="utf-8") as f:
+                f.write(probe.replace(_EXPORT_MISSION_PH, "{mission}"))
+
+    # Schema / CoT / PoT / ReAct: mission-specific text is in the user turn(s).
+    elif prompt_mode in _PROMPT_MODE_TO_BUILD:
+        probe = build_prompt(
+            mode=_PROMPT_MODE_TO_BUILD[prompt_mode],
+            mission=_EXPORT_MISSION_PH,
+            model_config=model_config,
+            catalog=catalog,
+            safety_rules=safety_rules,
+        )
+        if isinstance(probe, list):
+            with open(out_path / "prompt_template_messages.json", "w", encoding="utf-8") as f:
+                json.dump(probe, f, indent=2, ensure_ascii=False)
+        elif isinstance(probe, str):
+            with open(out_path / "prompt_template_string.txt", "w", encoding="utf-8") as f:
+                f.write(probe.replace(_EXPORT_MISSION_PH, "{mission}"))
 
     with open(out_path / "metrics.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)

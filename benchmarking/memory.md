@@ -16,7 +16,16 @@ Multi-LLM benchmarking platform for BehaviorTree XML generation, targeting SNCF 
 - `data/test_missions.json` — 100 fixed test missions (seed=42), 8 categories, stratified
 - `src/data/skills_loader.py` — `SkillsCatalog` + `SafetyRulesLoader` classes
 - `src/data/prompt_builder.py` — 7 prompt modes: zero_shot, few_shot, schema_guided, chain_of_thought, sft, **program_of_thoughts**, **react_agent** (the last accepts an error `history` for iterative refinement)
-- `src/data/generate_sft_dataset.py` — Mission generation with category stratification
+- `src/data/generate_sft_dataset.py` — **TEST** mission generator (100 fixed missions with `reference_xml: None`). Misnamed — does NOT produce training data.
+- `src/data/generate_sft_train.py` (NEW — 2026-04-23) — **TRAIN** mission + reference-XML generator. Compiles XML via `MissionBuilder` (no LLM proxy, valid by construction). Covers the 4 encadrant archetypes + existing categories:
+  - `transport_simple`, `transport_autorisation`, `simulation`, `complexe_multi_phase`, `ambigue`
+  - `inspection_volee_sans_ctrl` (mesures a la volee sans analyse)
+  - `inspection_volee_avec_ctrl` (mesures a la volee + analyse + corrective)
+  - `inspection_corrective_retry` (reinspection vitesse reduite, `Repeat(num_cycles=3)` patche sur l'execute)
+  - `intervention_catenaire_superviseur` (**needs new catalog skills** — emis vers `data/missions_needs_new_skills.jsonl` quand `--include-unsupported`)
+  - Commandes: `python -m src.data.generate_sft_train --method {sft|dpo|kto|grpo|all} --n 2000 --seed 42`
+  - Formats : SFT/GRPO `{id, mission, category, xml}`, DPO `{prompt, chosen, rejected}`, KTO `{prompt, completion, label}` (1 pos + 1 neg / mission)
+  - Negatifs DPO/KTO degrades par: suppression de `MoveAndStop`, port requis drop, `main_tree_to_execute` strip, ou renommage skill en ID inconnu
 
 ### Evaluation Layer
 - `src/eval/validate_bt.py` — 5-level BT validator (refactored from `finetune/validate_bt.py`, all constants from catalog)
@@ -85,8 +94,8 @@ Wired into `src/train/unified_trainer.py` (line ~60) and `src/eval/benchmark.py:
 ## Next Steps (Phase 0 continuation)
 1. Run zero-shot baselines on all 5 models
 2. Analyze results, compute per-category metrics
-3. Generate SFT dataset from proxy LLM
-4. Begin Phase 1: SFT + QLoRA training runs
+3. ~~Generate SFT dataset from proxy LLM~~ DONE via `src/data/generate_sft_train.py` (MissionBuilder-backed, no proxy needed)
+4. Begin Phase 1: SFT + QLoRA training runs (push `data/dataset_{sft,dpo,kto,grpo}.jsonl` to cluster first)
 5. **Run PoT + ReAct baselines** on all 5 models (`--prompt-mode pot`, `--prompt-mode react_agent`). Compare against CoT/schema_guided on the same test set.
 6. `pip install langgraph` on the cluster venv to activate the real ReAct state machine (plain-loop fallback is functional but lacks graph introspection)
 

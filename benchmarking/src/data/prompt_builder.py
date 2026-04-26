@@ -163,14 +163,36 @@ FEW_SHOT_EXAMPLES = [
 
 def build_system_prompt(safety_rules: SafetyRulesLoader | None = None) -> str:
     """
-    Build the final system prompt string actually used at inference time.
-    This is also saved alongside benchmark runs for reproducibility.
+    NAV4RAIL XML system string (plus optional safety rules).
+
+    PoT / ReAct eval uses :data:`CODE_SYSTEM_PROMPT` instead; see
+    :func:`system_message_body_for_mode` for the string that matches
+    ``build_prompt`` per mode.
     """
 
     system_content = SYSTEM_PROMPT
     if safety_rules:
         system_content += "\n\n" + safety_rules.summarize_for_prompt()
     return system_content
+
+
+def system_message_body_for_mode(
+    mode: str,
+    safety_rules: SafetyRulesLoader | None = None,
+) -> str:
+    """
+    System-role text exactly as ``build_prompt`` chooses for ``mode``.
+
+    Accepts benchmark ``training.method`` values (``pot``) and internal
+    ``build_prompt`` names (``program_of_thoughts``).
+    """
+
+    if mode in ("pot", "react_agent", "program_of_thoughts"):
+        text = CODE_SYSTEM_PROMPT
+        if safety_rules is not None:
+            text += "\n\n" + safety_rules.summarize_for_prompt()
+        return text
+    return build_system_prompt(safety_rules=safety_rules)
 
 
 # ── Chain-of-Thought Template ────────────────────────────────────────────────
