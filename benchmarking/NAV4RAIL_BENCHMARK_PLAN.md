@@ -298,6 +298,90 @@ Premier travail public à fine-tuner un modèle 7B sur la génération de BTs **
 **Citation amont (corpus de BTs)** :
 > Ghzouli, R. et al. (2023). Behavior trees and state machines in robotics applications. *IEEE TSE*. — corpus de 600 BTs open-source réutilisé par BTGenBot.
 
+## 1.9 Expansion via Planification + RAG (Skill Retrieval)
+
+Troisième famille d'approches, complémentaire au fine-tuning (§1.2-1.3) et à la génération via code intermédiaire (§1.7). Au lieu d'apprendre les skills par poids, on les rend **disponibles à l'inférence** via un index de connaissances et on délègue au LLM la composition.
+
+### 1.9.a Principe
+
+```
+Mission NL                                                BehaviorTree XML
+    │                                                            ▲
+    ▼                                                            │
+┌────────────┐    embedding        ┌──────────────────┐    ┌─────┴──────┐
+│ Planner    │ ─── search ───────▶ │ Vector store     │    │ Composer   │
+│ (LLM HL)   │                     │ (skills, ports,  │    │ (LLM)      │
+│            │ ◀── top-K skills ── │  examples,       │ ──▶│            │
+│            │                     │  patterns SR)    │    │            │
+└────────────┘                     └──────────────────┘    └────────────┘
+```
+
+Deux travaux récents valident le pattern pour les BTs :
+
+- **LLM-OBTEA** (Chen et al., 2024 — *LLM-driven Behavior Tree generation with Online Behavior Tree Expansion and Adaptation*) : sépare planification haut-niveau et expansion ; les nœuds planifiés sont raffinés à la volée en utilisant des descriptions de skills récupérées dynamiquement. Robuste à l'ajout de nouveaux skills sans réentraînement.
+- **BETR-XP-LLM** (2024) : *Behavior Tree Retrieval-augmented eXPansion*. Index vectoriel de patterns + retrieval avant génération. Particulièrement adapté quand le catalogue évolue (ajout de capteurs, suppression d'actions obsolètes).
+
+### 1.9.b Pipeline NAV4RAIL proposé
+
+1. **Indexation** (build-time, à régénérer à chaque update du catalogue) :
+   - Pour chaque skill du catalogue : embedder `(id + description + ports + prerequisites + family)` → vecteur dans une base FAISS / Chroma / Qdrant
+   - Pour chaque pattern SR (SR-023..027) : embedder la description + un exemple XML canonique
+   - Index sur disque : `data/skill_index.faiss` (généré par `scripts/build_skill_index.py`)
+2. **Planification** (inférence, étape 1) :
+   - LLM reçoit la mission NL + une instruction de planification ("Décompose en 3-7 sous-objectifs de haut niveau")
+   - Sortie : liste de sous-objectifs sémantiques (ex: "1. Charger la mission, 2. Calculer le chemin, 3. Exécuter inspection avec contrôle, 4. Terminer")
+3. **Retrieval** (inférence, étape 2) :
+   - Pour chaque sous-objectif → top-K skills par similarité cosinus (K=5-8)
+   - Top-K patterns SR si applicable
+   - Concaténation des descriptions de skills retrouvés dans le contexte
+4. **Composition** (inférence, étape 3) :
+   - LLM reçoit : mission + sous-objectifs + descriptions des skills retrouvés (pas tous les 31)
+   - Tâche : produire le XML final
+   - Compatible avec `react_base_agent` (refinement loop) et avec contraintes GBNF/Outlines
+
+### 1.9.c Avantages spécifiques au contexte NAV4RAIL
+
+1. **Évolutivité du catalogue** : ajouter un capteur (nouveau skill `MeasureTemperature`, par ex.) = ajouter une ligne au YAML + re-embedder. **Pas de re-fine-tuning**. C'est l'argument décisif vu l'inventaire d'aujourd'hui (3 skills ajoutés en une session).
+2. **Réduction du contexte** : les 5 modèles ont un context window 4-8k tokens. Injecter les 31 skills + 27 SR + step_types consomme ~3-4k tokens. Avec retrieval (top-8 skills), on descend à ~500-800 tokens libérant la fenêtre pour le raisonnement.
+3. **Explicabilité** : la liste des skills retrouvés par mission est inspectable et auditable. Utile pour le rapport de safety SNCF.
+4. **Combinable avec tout le reste** : RAG + SFT (modèle FT plus retrieval), RAG + ReAct (refinement loop avec contexte récupéré), RAG + GBNF (contrainte token-level sur les seuls skills retrouvés — narrowing du grammaire à chaque mission).
+
+### 1.9.d Limites et risques
+
+- **Sensibilité du retriever** : si l'embedding model est faible (sentence-transformers `all-MiniLM-L6-v2`), il rate des correspondances sémantiques. Mitigation : embeddings spécialisés robotique (ex: `ClipBERT` ou un sentence-transformer fine-tuné sur le dataset NAV4RAIL).
+- **Cold start** : le retriever ne sait rien des relations entre skills (pré-requis, ordre temporel). Le composer doit les apprendre — soit via SFT, soit via les patterns SR explicitement retrouvés.
+- **Cohérence inter-skills** : retrieval indépendant peut ramener des skills incompatibles. Mitigation : graph-aware retrieval (FAISS sur (skill, prerequisite_chain)) ou re-ranking par compatibilité.
+- **Latence** : 3 appels LLM (planification + composition + retrieval embedding) vs 1 seul en zero-shot. Coût ~2-3× sur P100.
+
+### 1.9.e Stack technique
+
+| Composant | Outil | Rôle |
+|---|---|---|
+| Embeddings | `sentence-transformers` (`all-mpnet-base-v2` ou domain-FT) | encoder skill descriptions + missions |
+| Vector store | `faiss-cpu` (offline) ou `chromadb` (HTTP) | top-K skill retrieval |
+| Planner / Composer | les 5 LLMs déjà en config | aucun changement du model_loader |
+| Orchestration | LangGraph (réutiliser `react_base_agent`) | nodes : `plan → retrieve → compose → validate → reflect` |
+| Index regen | `scripts/build_skill_index.py` (à créer) | déclenché quand `data/skills_catalog.yaml` change (hash) |
+
+### 1.9.f Comparaison rapide aux deux autres approches
+
+| Critère | SFT/PEFT (§1.2-1.3) | Code intermédiaire PoT (§1.7) | RAG Skill Retrieval (§1.9) |
+|---|---|---|---|
+| Connaissances catalogue | dans les poids | dans les API docs injectées (statique) | **dans un index** (dynamique) |
+| Coût ajout d'1 skill | re-fine-tuning (heures-jours) | re-injection des docs API (négligeable) | **re-embedding 1 ligne** (secondes) |
+| Coût inférence | 1 LLM call | 1-3 LLM calls + 1 sandbox exec | 2-3 LLM calls + 1 retrieval |
+| Risque hallucination | élevé sans GBNF/Outlines | nul (sandbox refuse) | **bas** (skill liste contrainte par retrieval) |
+| Adaptation OOD | rigide (limité au train set) | bonne via reflexion | **excellente** (retrieval s'ajuste à la mission) |
+| Maturité littérature | mature (BTGenBot, etc.) | émergente (PoT/PAL/ViperGPT) | émergente (LLM-OBTEA, BETR-XP-LLM) |
+
+### 1.9.g Roadmap d'intégration (Phase 4 — facultative)
+
+- [ ] Implémenter `scripts/build_skill_index.py` (FAISS, hash du catalogue)
+- [ ] Implémenter `src/agents/rag_agent.py` (`RAGAgent`, hérite de la même `AgentResult`)
+- [ ] Mode prompt `rag_agent` dans `prompt_builder.py` (3 templates : plan, retrieve-augmented, refine)
+- [ ] Bench comparatif : SFT vs PoT vs RAG sur les 100 missions, mêmes 5 modèles
+- [ ] Ablation : K (1, 3, 5, 8), embedding model (MiniLM vs mpnet vs domain-FT)
+
 ---
 
 # 2. Volet Dataset & Catalogue de Skills

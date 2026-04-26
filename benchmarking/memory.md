@@ -11,7 +11,7 @@ Multi-LLM benchmarking platform for BehaviorTree XML generation, targeting SNCF 
 ## Architecture Completed (Phase 0)
 
 ### Data Layer
-- `data/skills_catalog.yaml` — Single source of truth: 28 skills, full port specs, prerequisites, step_types, control_nodes, limits
+- `data/skills_catalog.yaml` — Single source of truth: **31 skills** (28 → 31 on 2026-04-27 after corpus inventory gap analysis), full port specs, prerequisites, step_types, control_nodes, limits
 - `data/safety_rules.yaml` — 27 rules across L1-L5 (5 new L5 rules: SR-023 to SR-027)
 - `data/test_missions.json` — 100 fixed test missions (seed=42), 8 categories, stratified
 - `src/data/skills_loader.py` — `SkillsCatalog` + `SafetyRulesLoader` classes
@@ -302,3 +302,49 @@ Cycle × 1-2 :
 | Stabilité | Sensible à β KL | Plus stable mais sur-fit possible |
 | VRAM | Plus élevé | Plus faible |
 | Convergence | Plus lente, signal continu | Plus rapide, plateau plus haut |
+
+## Refactor 2026-04-27 — découplage agents + gap catalogue + RAG + bilan
+
+### Découplage AgentResult
+- Nouveau `src/agents/base_agent.py` héberge `AgentResult` (dataclass partagée)
+- `src/agents/pot_agent.py` re-exporte `AgentResult` depuis `base_agent` pour compat
+- `src/agents/react_pot_agent.py` importe `AgentResult` depuis `base_agent`, garde `extract_code` depuis `pot_agent`
+- `src/agents/react_base_agent.py` importe **uniquement** `base_agent` — plus aucun lien avec `pot_agent` (vérifié par script)
+- `src/agents/__init__.py` expose `AgentResult` au top-level
+
+### Gap catalogue comblé
+3 skills ajoutés à `data/skills_catalog.yaml` (famille `simulation`) :
+- `ChangeSimulationStatus` — Action, no ports, prerequisites=[]
+- `PassGraphicalPreliminaryPathDescription` — Action, port `graphical_path` (input bb_var)
+- `FinalizeAndPublishGraphicalPathDescription` — Action, port `graphical_path`, prerequisites=[PassGraphicalPreliminaryPathDescription]
+
+`metadata.total_skills` 28 → 31 ; `metadata.version` 1.0 → 1.1. Bloc `prerequisites:` enrichi avec la chaîne `Pass → Finalize`. Inventaire re-run : couverture 96.4 % → **96.8 %** (30/31 — `SimulationStarted` reste catalog-only, attendu pour branching futur).
+Comment stale dans `src/data/skills_loader.py::valid_skills` ("All 28 valid skill IDs") généralisé.
+
+### Guide SLURM/vast.ai LangGraph
+`docs/LANGGRAPH_RUNTIME_GUIDE.md` — décisions clés :
+- **SLURM compute = no internet** : LangSmith / Weave streaming impossible. W&B en `mode=offline` puis `wandb sync` depuis le login node
+- **vast.ai = internet** : tout fonctionne live (LangSmith, Weave, W&B online)
+- **Trace JSONL toujours en parallèle** : line-buffered (`buffering=1`) + flush explicite, écrit dans `$SLURM_TMPDIR`, rsync à la fin du job
+- **Visualisation** : 3 options — Plain Python timeline (recommandée), W&B Table custom panel, webapp Gradio (uniquement vast.ai)
+- **Pin** `langgraph>=0.2.50,<0.4` ; `recursion_limit` déjà sizé dans agents
+- **`PYTHONUNBUFFERED=1` obligatoire sur SLURM** (logs flush au fil de l'eau, pas au job end)
+- **JAMAIS** set `LANGSMITH_*` env vars sur SLURM (proxy hang silencieux)
+- Templates SLURM + vast.ai job scripts fournis
+
+### Approche C — RAG / Skill Retrieval (LLM-OBTEA / BETR-XP-LLM)
+Ajoutée dans PLAN.md §1.9. Pipeline : `plan → retrieve → compose → validate → reflect`. Index FAISS sur 31 skills (mpnet-base 768 dims, ~100 KB). Avantage décisif : ajouter un skill = re-embed 1 ligne, **zéro re-FT**. Phase 4 facultative.
+
+### Document de bilan
+`docs/APPROACHES_COMPARISON.md` — synthèse des 3 approches (FT spécialisé, code intermédiaire PoT, RAG Skill Retrieval), avec :
+- Description, modèles utilisés, méthodes d'entraînement, inférence, orchestration agentique, optimisation
+- Points forts / points faibles / risques spécifiques NAV4RAIL pour chaque
+- Matrice des 9 combinaisons (C1-C9), C8-C9 = phase 4
+- Métriques transverses comparées (validity, score, hallucination, latency, VRAM, coût FT, coût ajout skill)
+- Décisions consolidées (état 2026-04-27)
+- Références bibliographiques par approche
+
+### À traiter ensuite (pipeline Q de l'utilisateur)
+1. ~~Gap catalogue~~ DONE
+2. Stage 0 (continued pretraining sur corpus + API code, conditionnel)
+3. SDPO avec rich/text feedback : décomposition validateur (parse + structure + sémantique + cohérence + hallucination) + erreurs/warnings text disponibles **côté entraînement uniquement**, pas à l'inférence (clarification user 2026-04-27)

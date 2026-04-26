@@ -21,7 +21,7 @@ import re
 import time
 from typing import Any, TypedDict
 
-from src.agents.pot_agent import AgentResult
+from src.agents.base_agent import AgentResult
 from src.data.skills_loader import SafetyRulesLoader, SkillsCatalog
 
 logger = logging.getLogger(__name__)

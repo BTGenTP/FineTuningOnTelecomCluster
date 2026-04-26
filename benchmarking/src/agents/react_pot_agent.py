@@ -32,7 +32,8 @@ import logging
 import time
 from typing import Any, TypedDict
 
-from src.agents.pot_agent import AgentResult, extract_code
+from src.agents.base_agent import AgentResult
+from src.agents.pot_agent import extract_code
 from src.agents.sandbox import extract_xml_from_result, run_sandboxed
 from src.data.skills_loader import SafetyRulesLoader, SkillsCatalog
 

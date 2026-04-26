@@ -2,12 +2,14 @@
 NAV4RAIL code-as-reasoning + direct-XML agents.
 
 Public API:
-    from src.agents import PoTAgent, ReActPoTAgent, ReActBaseAgent, run_sandboxed
+    from src.agents import AgentResult, PoTAgent, ReActPoTAgent, ReActBaseAgent, run_sandboxed
 """
 
+from src.agents.base_agent import AgentResult
 from src.agents.sandbox import ExecutionResult, SandboxError, run_sandboxed
 
 __all__ = [
+    "AgentResult",
     "ExecutionResult",
     "SandboxError",
     "run_sandboxed",

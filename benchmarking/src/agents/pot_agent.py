@@ -20,40 +20,18 @@ from __future__ import annotations
 import logging
 import re
 import time
-from dataclasses import dataclass, field
 from typing import Any
 
-from src.agents.sandbox import ExecutionResult, extract_xml_from_result, run_sandboxed
+from src.agents.base_agent import AgentResult
+from src.agents.sandbox import extract_xml_from_result, run_sandboxed
 from src.data.skills_loader import SafetyRulesLoader, SkillsCatalog
 
 logger = logging.getLogger(__name__)
 
 
-# ── Result type ──────────────────────────────────────────────────────────────
-
-
-@dataclass
-class AgentResult:
-    """Outcome of a single agent run on one mission."""
-
-    mission: str
-    xml: str = ""
-    success: bool = False  # True iff sandbox ran AND an <root> was extracted
-    code: str = ""
-    # Latency breakdown
-    total_latency_s: float = 0.0
-    llm_latency_s: float = 0.0
-    sandbox_latency_s: float = 0.0
-    # Token counts (from the LLM call)
-    n_tokens: int = 0
-    # Execution info
-    n_iterations: int = 1
-    execution_results: list[ExecutionResult] = field(default_factory=list)
-    # Final error if success=False
-    error_type: str | None = None
-    error_message: str | None = None
-    # Full trace for debugging
-    trace: list[dict[str, Any]] = field(default_factory=list)
+# Re-exported for backward-compat: external imports of `AgentResult` from
+# `src.agents.pot_agent` still resolve.
+__all__ = ["AgentResult", "PoTAgent", "extract_code"]
 
 
 # ── Code extraction ──────────────────────────────────────────────────────────
