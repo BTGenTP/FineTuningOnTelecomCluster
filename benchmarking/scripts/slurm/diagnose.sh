@@ -10,7 +10,7 @@
 #   # Then: cat runs/slurm/nav4rail_diagnose_*/slurm_*.out
 
 #SBATCH --job-name=nav4rail_diagnose
-#SBATCH --partition=P100
+#SBATCH --partition=3090
 #SBATCH --gres=gpu:1
 #SBATCH --mem=8G
 #SBATCH --cpus-per-task=2
@@ -51,6 +51,10 @@ echo ""
 
 echo "--- Venv ---"
 VENV_DIR="$HOME/.venvs/nav4rail_bench"
+# Match the partition-scoped naming used by _common.sh
+if [ -n "${SLURM_JOB_PARTITION:-}" ]; then
+    VENV_DIR="${VENV_DIR}_${SLURM_JOB_PARTITION}"
+fi
 echo "VENV_DIR: $VENV_DIR"
 if [ -d "$VENV_DIR" ]; then
     echo "  EXISTS"

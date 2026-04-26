@@ -40,6 +40,7 @@ Commands:
   cancel <job_id>                 Cancel a SLURM job (scancel)
   shell                           Open interactive SSH session
   cmd "<command>"                 Execute arbitrary command on cluster
+  vastai [args...]                Launch on vast.ai (delegates to scripts/vastai_run.sh)
 
 Examples:
   cluster_exec.sh submit train.sh METHOD=grpo MODEL=llama3_8b
@@ -49,6 +50,8 @@ Examples:
   cluster_exec.sh logs 772878
   cluster_exec.sh cancel 772878
   cluster_exec.sh cmd "nvidia-smi"
+  cluster_exec.sh vastai --model gemma2_9b --method zero_shot
+  cluster_exec.sh vastai --dry-run
 USAGE
     exit 0
 }
@@ -69,6 +72,18 @@ do_submit() {
         remote_script="$script"
     else
         remote_script="${REMOTE_PATH}/scripts/slurm/${script}"
+    fi
+
+    # ── Sync .env to cluster so _common.sh can source it ────────────────────
+    # Paths: this script is in scripts/, so benchmarking/ is one level up.
+    local bench_dir
+    bench_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    if [ -r "${bench_dir}/.env" ]; then
+        echo "Syncing .env to ${REMOTE_HOST}:${REMOTE_PATH}/.env"
+        # --chmod=600 keeps the token private on the shared cluster FS.
+        rsync -az --chmod=F600 "${bench_dir}/.env" "${REMOTE_HOST}:${REMOTE_PATH}/.env"
+    else
+        echo "Note: no ${bench_dir}/.env found — relying on cluster-side credentials."
     fi
 
     echo "Submitting: ${remote_script}"
@@ -142,6 +157,20 @@ do_cmd() {
     ssh "${REMOTE_HOST}" "cd ${REMOTE_PATH} && ${cmd}"
 }
 
+do_vastai() {
+    # Resolve this script's directory to find vastai_run.sh
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local vastai_script="${script_dir}/vastai_run.sh"
+
+    if [ ! -x "$vastai_script" ]; then
+        echo "Error: ${vastai_script} not found or not executable"
+        exit 1
+    fi
+
+    exec "$vastai_script" "$@"
+}
+
 # ── Main ────────────────────────────────────────────────────────────────────
 if [ $# -lt 1 ]; then
     usage
@@ -172,6 +201,9 @@ case "$COMMAND" in
     cmd)
         [ $# -lt 1 ] && { echo "Error: cmd requires a command string"; exit 1; }
         do_cmd "$*"
+        ;;
+    vastai)
+        do_vastai "$@"
         ;;
     -h|--help|help)
         usage

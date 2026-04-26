@@ -1,0 +1,1467 @@
+[
+  {
+    "id": "test_001",
+    "mission": "Mission de transport avec arret obligatoire au PK 121.4 pour validation operateur avant de continuer vers site de maintenance Gamma.",
+    "category": "transport_autorisation",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_002",
+    "mission": "Campagne de mesures sur le catenaire voie V1 du PK 291.9 au PK 342.6. Analyser chaque segment mesure.",
+    "category": "mesures_analyse",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_003",
+    "mission": "Le robot doit se rendre au poste d'aiguillage A3.",
+    "category": "ambigue",
+    "expected_step_types": [],
+    "reference_xml": null
+  },
+  {
+    "id": "test_004",
+    "mission": "Acquisition de donnees sur le tirefond, voie V1, section PK 345.3-261.7. Pas de verification des mesures.",
+    "category": "inspection_sans_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_005",
+    "mission": "Mission corrective : reinspecter le soudure aluminothermique voie principale aux positions de defauts identifies lors de la precedente inspection (PK 464.6 a 303.9).",
+    "category": "inspection_corrective",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_006",
+    "mission": "Inspection avec controle du joint de rail entre le PK 309.3 et le PK 367.5 sur la voie 3. Verifier la qualite des mesures et generer des corrections si necessaire.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_007",
+    "mission": "Mission d'inspection et de verification du eclisse sur la voie 3 du PK 451.6 au PK 12.2. Analyser les mesures et corriger les defauts detectes.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_008",
+    "mission": "Campagne de mesures sur le tirefond voie principale du PK 52.4 au PK 435.9. Analyser chaque segment mesure.",
+    "category": "mesures_analyse",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_009",
+    "mission": "Deplacer le robot jusqu'au depot Nord en demandant une autorisation au PK 362.0.",
+    "category": "transport_autorisation",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_010",
+    "mission": "Mission de transport simple : deplacer le robot du depot au point depot Nord sur la voie A.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_011",
+    "mission": "Transport standard vers la zone site de maintenance Gamma par la voie principale, sans inspection.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_012",
+    "mission": "Transfert du robot vers le site de maintenance site de maintenance Gamma, voie 1.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_013",
+    "mission": "Mission complexe voie 4 : transport initial au PK 184.2, inspection du eclisse avec verification jusqu'au PK 154.0, puis retour avec arret autorisation.",
+    "category": "complexe_multi_phase",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_014",
+    "mission": "Controler le soudure aluminothermique entre les PK 122.4 et 202.2 voie 4. Les mesures doivent etre analysees et les sous-sequences correctives generees.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_015",
+    "mission": "Mission de transport simple : deplacer le robot du depot au point quai 7 sur la voie B.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_016",
+    "mission": "Test en simulation : deplacement vers depot principal, voie V2.",
+    "category": "simulation",
+    "expected_step_types": [
+      0,
+      1,
+      2
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_017",
+    "mission": "Mission d'inspection et de verification du eclisse sur la voie B du PK 452.6 au PK 498.9. Analyser les mesures et corriger les defauts detectes.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_018",
+    "mission": "Mission multi-phase : (1) Transport vers PK 205.7 voie V1, (2) inspection avec controle du soudure aluminothermique jusqu'au PK 37.9, (3) retour au depot via voie V1.",
+    "category": "complexe_multi_phase",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_019",
+    "mission": "Inspection avec analyse du aiguillage voie B, section PK 59.4 a PK 91.9. Valider la qualite et appliquer les corrections.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_020",
+    "mission": "Campagne de mesures sur le rail Vignole voie 4 du PK 392.5 au PK 85.9. Analyser chaque segment mesure.",
+    "category": "mesures_analyse",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_021",
+    "mission": "Transport standard vers la zone terminus ligne 4 par la voie C, sans inspection.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_022",
+    "mission": "Campagne de mesures sur le soudure aluminothermique voie 1 du PK 219.5 au PK 35.8. Analyser chaque segment mesure.",
+    "category": "mesures_analyse",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_023",
+    "mission": "Envoyer le robot faire un tour sur la voie C.",
+    "category": "ambigue",
+    "expected_step_types": [],
+    "reference_xml": null
+  },
+  {
+    "id": "test_024",
+    "mission": "Mission de transport avec arret obligatoire au PK 299.7 pour validation operateur avant de continuer vers depot Nord.",
+    "category": "transport_autorisation",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_025",
+    "mission": "Acheminer le robot au point kilometrique 440.1 sur la voie 1.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_026",
+    "mission": "Mission complexe voie 1 : transport initial au PK 240.7, inspection du traverse avec verification jusqu'au PK 225.5, puis retour avec arret autorisation.",
+    "category": "complexe_multi_phase",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_027",
+    "mission": "Reprise d'inspection corrective du semelle de rail sur voie C entre PK 482.5 et PK 152.6. Les defauts precedemment detectes doivent etre reinspectes.",
+    "category": "inspection_corrective",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_028",
+    "mission": "Transfert du robot vers le site de maintenance poste d'aiguillage A3, voie B.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_029",
+    "mission": "Campagne de mesures sur le signal lumineux voie A du PK 13.4 au PK 294.6. Analyser chaque segment mesure.",
+    "category": "mesures_analyse",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_030",
+    "mission": "Inspection avec controle du appareil de voie entre le PK 82.7 et le PK 282.6 sur la voie 3. Verifier la qualite des mesures et generer des corrections si necessaire.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_031",
+    "mission": "Mission corrective : reinspecter le signal lumineux voie B aux positions de defauts identifies lors de la precedente inspection (PK 212.0 a 105.6).",
+    "category": "inspection_corrective",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_032",
+    "mission": "Acheminement vers poste d'aiguillage A3 voie V1, pause reglementaire au PK 442.0 en attente d'autorisation.",
+    "category": "transport_autorisation",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_033",
+    "mission": "Acheminement vers site de maintenance Gamma voie 4, pause reglementaire au PK 115.1 en attente d'autorisation.",
+    "category": "transport_autorisation",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_034",
+    "mission": "Inspection avec controle du catenaire entre le PK 442.1 et le PK 495.4 sur la voie C. Verifier la qualite des mesures et generer des corrections si necessaire.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_035",
+    "mission": "Inspection du aiguillage entre PK 346.2 et PK 315.9 sur voie C. Mesures a la volee, sans analyse ni correction.",
+    "category": "inspection_sans_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_036",
+    "mission": "Acheminement vers gare de triage Est voie 4, pause reglementaire au PK 151.3 en attente d'autorisation.",
+    "category": "transport_autorisation",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_037",
+    "mission": "Inspection du passage a niveau entre PK 112.2 et PK 411.8 sur voie 2. Mesures a la volee, sans analyse ni correction.",
+    "category": "inspection_sans_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_038",
+    "mission": "Test en simulation : deplacement vers terminus ligne 4, voie A.",
+    "category": "simulation",
+    "expected_step_types": [
+      0,
+      1,
+      2
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_039",
+    "mission": "Mission d'inspection et de verification du joint de rail sur la voie 3 du PK 186.0 au PK 460.5. Analyser les mesures et corriger les defauts detectes.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_040",
+    "mission": "Acquisition de donnees sur le joint de rail, voie V1, section PK 99.6-253.6. Pas de verification des mesures.",
+    "category": "inspection_sans_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_041",
+    "mission": "Maintenance preventive du eclisse.",
+    "category": "ambigue",
+    "expected_step_types": [],
+    "reference_xml": null
+  },
+  {
+    "id": "test_042",
+    "mission": "Controler le rail entre les PK 47.6 et 424.4 voie V1. Les mesures doivent etre analysees et les sous-sequences correctives generees.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_043",
+    "mission": "Mission multi-phase : (1) Transport vers PK 283.4 voie 1, (2) inspection avec controle du soudure aluminothermique jusqu'au PK 357.2, (3) retour au depot via voie 1.",
+    "category": "complexe_multi_phase",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_044",
+    "mission": "Transport vers gare de triage Est sur voie C avec arret au PK 1.6 pour autorisation de passage.",
+    "category": "transport_autorisation",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_045",
+    "mission": "Acheminer le robot au point kilometrique 73.4 sur la voie V1.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_046",
+    "mission": "Mission de transit entre le depot et le point atelier Bravo via la voie V2.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_047",
+    "mission": "Inspection avec controle du patin de rail entre le PK 22.6 et le PK 0.8 sur la voie principale. Verifier la qualite des mesures et generer des corrections si necessaire.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_048",
+    "mission": "Mission de transport simple : deplacer le robot du depot au point voie de garage sur la voie V2.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_049",
+    "mission": "Mission d'inspection et de verification du eclisse sur la voie C du PK 319.5 au PK 339.1. Analyser les mesures et corriger les defauts detectes.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_050",
+    "mission": "Inspection avec analyse du joint de rail voie 4, section PK 179.4 a PK 420.3. Valider la qualite et appliquer les corrections.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_051",
+    "mission": "Inspection du soudure aluminothermique entre PK 233.2 et PK 410.7 sur voie 4. Mesures a la volee, sans analyse ni correction.",
+    "category": "inspection_sans_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_052",
+    "mission": "Inspection avec controle du patin de rail entre le PK 67.5 et le PK 451.1 sur la voie 4. Verifier la qualite des mesures et generer des corrections si necessaire.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_053",
+    "mission": "Reprise d'inspection corrective du tirefond sur voie 1 entre PK 114.1 et PK 399.0. Les defauts precedemment detectes doivent etre reinspectes.",
+    "category": "inspection_corrective",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_054",
+    "mission": "Inspection avec controle du rail Vignole entre le PK 279.0 et le PK 427.5 sur la voie 2. Verifier la qualite des mesures et generer des corrections si necessaire.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_055",
+    "mission": "Test en simulation : deplacement vers zone de stockage Sud, voie V2.",
+    "category": "simulation",
+    "expected_step_types": [
+      0,
+      1,
+      2
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_056",
+    "mission": "Reprise d'inspection corrective du ballast sur voie 3 entre PK 355.2 et PK 361.3. Les defauts precedemment detectes doivent etre reinspectes.",
+    "category": "inspection_corrective",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_057",
+    "mission": "Mission de transit entre le depot et le point poste d'aiguillage A3 via la voie 1.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_058",
+    "mission": "Transfert du robot vers le site de maintenance zone de stockage Sud, voie 1.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_059",
+    "mission": "Mission corrective : reinspecter le semelle de rail voie 1 aux positions de defauts identifies lors de la precedente inspection (PK 342.6 a 370.2).",
+    "category": "inspection_corrective",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_060",
+    "mission": "Transport vers depot principal sur voie 3 avec arret au PK 65.7 pour autorisation de passage.",
+    "category": "transport_autorisation",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_061",
+    "mission": "Controler le semelle de rail entre les PK 403.1 et 195.0 voie 4. Les mesures doivent etre analysees et les sous-sequences correctives generees.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_062",
+    "mission": "Mission de transport avec arret obligatoire au PK 98.3 pour validation operateur avant de continuer vers site de maintenance Gamma.",
+    "category": "transport_autorisation",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_063",
+    "mission": "Reprise d'inspection corrective du patin de rail sur voie V1 entre PK 120.4 et PK 171.5. Les defauts precedemment detectes doivent etre reinspectes.",
+    "category": "inspection_corrective",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_064",
+    "mission": "Mission de transport simple : deplacer le robot du depot au point poste d'aiguillage A3 sur la voie 2.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_065",
+    "mission": "Transport standard vers la zone poste d'aiguillage A3 par la voie A, sans inspection.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_066",
+    "mission": "Reprise d'inspection corrective du passage a niveau sur voie B entre PK 142.6 et PK 129.1. Les defauts precedemment detectes doivent etre reinspectes.",
+    "category": "inspection_corrective",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_067",
+    "mission": "Acquisition de donnees sur le passage a niveau, voie principale, section PK 313.8-218.8. Pas de verification des mesures.",
+    "category": "inspection_sans_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_068",
+    "mission": "Inspection du passage a niveau entre PK 430.4 et PK 392.8 sur voie V1. Mesures a la volee, sans analyse ni correction.",
+    "category": "inspection_sans_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_069",
+    "mission": "Releve et analyse du tirefond entre PK 494.4 et PK 315.8 voie C.",
+    "category": "mesures_analyse",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_070",
+    "mission": "Inspection avec controle du appareil de voie entre le PK 373.5 et le PK 223.9 sur la voie principale. Verifier la qualite des mesures et generer des corrections si necessaire.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_071",
+    "mission": "Mission d'inspection et de verification du rail Vignole sur la voie A du PK 426.8 au PK 360.4. Analyser les mesures et corriger les defauts detectes.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_072",
+    "mission": "Inspection du passage a niveau entre PK 75.0 et PK 23.3 sur voie 4. Mesures a la volee, sans analyse ni correction.",
+    "category": "inspection_sans_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_073",
+    "mission": "Mission de transport simple : deplacer le robot du depot au point site de maintenance Gamma sur la voie V2.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_074",
+    "mission": "Releve de mesures du rail Vignole sur voie 1 de PK 107.6 a PK 402.9 sans controle qualite.",
+    "category": "inspection_sans_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_075",
+    "mission": "Aller voir l'etat du ballast vers le PK 80.3.",
+    "category": "ambigue",
+    "expected_step_types": [],
+    "reference_xml": null
+  },
+  {
+    "id": "test_076",
+    "mission": "Reprise d'inspection corrective du catenaire sur voie C entre PK 93.0 et PK 133.6. Les defauts precedemment detectes doivent etre reinspectes.",
+    "category": "inspection_corrective",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_077",
+    "mission": "Inspection avec controle du patin de rail entre le PK 480.2 et le PK 135.1 sur la voie A. Verifier la qualite des mesures et generer des corrections si necessaire.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_078",
+    "mission": "Acheminement vers atelier Bravo voie V2, pause reglementaire au PK 386.3 en attente d'autorisation.",
+    "category": "transport_autorisation",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_079",
+    "mission": "Mission de transport simple : deplacer le robot du depot au point poste d'aiguillage A3 sur la voie A.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_080",
+    "mission": "Aller voir l'etat du ballast vers le PK 485.4.",
+    "category": "ambigue",
+    "expected_step_types": [],
+    "reference_xml": null
+  },
+  {
+    "id": "test_081",
+    "mission": "Mission de transit entre le depot et le point depot Nord via la voie principale.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_082",
+    "mission": "Deplacer le robot jusqu'au terminus ligne 4 en demandant une autorisation au PK 20.9.",
+    "category": "transport_autorisation",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_083",
+    "mission": "Transport standard vers la zone atelier Bravo par la voie 1, sans inspection.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_084",
+    "mission": "Releve et analyse du semelle de rail entre PK 137.5 et PK 436.3 voie C.",
+    "category": "mesures_analyse",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_085",
+    "mission": "Mission de transport avec arret obligatoire au PK 447.1 pour validation operateur avant de continuer vers zone de stockage Sud.",
+    "category": "transport_autorisation",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_086",
+    "mission": "Mission corrective : reinspecter le aiguillage voie V2 aux positions de defauts identifies lors de la precedente inspection (PK 459.3 a 249.3).",
+    "category": "inspection_corrective",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_087",
+    "mission": "Mission de transport simple : deplacer le robot du depot au point poste d'aiguillage A3 sur la voie C.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_088",
+    "mission": "Controler le appareil de voie entre les PK 167.6 et 356.4 voie A. Les mesures doivent etre analysees et les sous-sequences correctives generees.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_089",
+    "mission": "Acheminement vers atelier Bravo voie V1, pause reglementaire au PK 413.6 en attente d'autorisation.",
+    "category": "transport_autorisation",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_090",
+    "mission": "Campagne de mesures sur le catenaire voie B du PK 108.5 au PK 408.4. Analyser chaque segment mesure.",
+    "category": "mesures_analyse",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_091",
+    "mission": "Campagne de mesures sur le passage a niveau voie 4 du PK 318.2 au PK 122.2. Analyser chaque segment mesure.",
+    "category": "mesures_analyse",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_092",
+    "mission": "Releve et analyse du soudure aluminothermique entre PK 54.6 et PK 491.5 voie C.",
+    "category": "mesures_analyse",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_093",
+    "mission": "Transport vers gare de triage Est sur voie 2 avec arret au PK 304.1 pour autorisation de passage.",
+    "category": "transport_autorisation",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_094",
+    "mission": "Transport vers site de maintenance Gamma sur voie 4 avec arret au PK 85.6 pour autorisation de passage.",
+    "category": "transport_autorisation",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_095",
+    "mission": "Simulation de transport du robot vers site de maintenance Gamma sur voie A. Mode simulation active.",
+    "category": "simulation",
+    "expected_step_types": [
+      0,
+      1,
+      2
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_096",
+    "mission": "Transport standard vers la zone depot principal par la voie 4, sans inspection.",
+    "category": "transport_simple",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_097",
+    "mission": "Acquisition de donnees sur le semelle de rail, voie 2, section PK 339.9-171.1. Pas de verification des mesures.",
+    "category": "inspection_sans_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_098",
+    "mission": "Test en simulation : deplacement vers voie de garage, voie A.",
+    "category": "simulation",
+    "expected_step_types": [
+      0,
+      1,
+      2
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_099",
+    "mission": "Controler le ballast entre les PK 4.7 et 318.9 voie B. Les mesures doivent etre analysees et les sous-sequences correctives generees.",
+    "category": "inspection_avec_controle",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  },
+  {
+    "id": "test_100",
+    "mission": "Mission multi-phase : (1) Transport vers PK 141.9 voie 4, (2) inspection avec controle du rail Vignole jusqu'au PK 500.8, (3) retour au depot via voie 4.",
+    "category": "complexe_multi_phase",
+    "expected_step_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "reference_xml": null
+  }
+]

@@ -9,9 +9,9 @@
 # Source: https://gitlab.com/nav4rail/skills
 
 metadata:
-  version: "1.0"
+  version: "1.1"
   btcpp_format: "4"
-  total_skills: 28  # 27 original + Pause
+  total_skills: 31  # 27 original + Pause + 3 simulation skills (ChangeSimulationStatus, PassGraphicalPreliminaryPathDescription, FinalizeAndPublishGraphicalPathDescription) added 2026-04-27 from gitlab.com/nav4rail/behavior_trees corpus inventory
   source: "https://gitlab.com/nav4rail/skills"
   reference_bt: "data/real_inspection_mission.xml"
 
@@ -346,6 +346,34 @@ families:
         prerequisites: []
         description: "Condition vraie si la simulation est active"
 
+      ChangeSimulationStatus:
+        bt_tag: Action
+        ports: {}
+        prerequisites: []
+        description: "Bascule l'etat de la simulation (active/inactive). Utilise dans simulation_preparation pour passer en mode simulation."
+
+      PassGraphicalPreliminaryPathDescription:
+        bt_tag: Action
+        ports:
+          graphical_path:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{graphical_path}"
+        prerequisites: []
+        description: "Publie la description graphique preliminaire du chemin (avant finalisation). Specifique au mode simulation."
+
+      FinalizeAndPublishGraphicalPathDescription:
+        bt_tag: Action
+        ports:
+          graphical_path:
+            direction: input
+            type: bb_var
+            required: true
+            default: "{graphical_path}"
+        prerequisites: [PassGraphicalPreliminaryPathDescription]
+        description: "Finalise et publie la description graphique du chemin (apres avoir recu la description preliminaire). Specifique au mode simulation."
+
 # ---------------------------------------------------------------------------
 # Aggregated prerequisites (partial ordering constraints)
 # ---------------------------------------------------------------------------
@@ -354,6 +382,7 @@ prerequisites:
   CreatePath: [ProjectPointOnNetwork]
   AgregatePath: [CreatePath]
   GenerateMissionSequence: [LoadMission]
+  FinalizeAndPublishGraphicalPathDescription: [PassGraphicalPreliminaryPathDescription]
 
 # ---------------------------------------------------------------------------
 # Motion step type definitions

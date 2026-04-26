@@ -9,6 +9,10 @@ Modes:
   - schema_guided: system prompt + catalog excerpt + mission
   - chain_of_thought: system prompt + reasoning template + mission
   - sft: formatted for training (system/user/assistant roles)
+  - program_of_thoughts: Code-as-Reasoning — ask for a Python script against
+    MissionBuilder API. The agent executes the script in a sandbox.
+  - react_pot_agent: Same as PoT but supports an error `history` for iterative
+    refinement (used by the LangGraph ReAct loop).
 
 Reuses SYSTEM_PROMPT from finetune/finetune_llama3_nav4rail.py.
 """
@@ -157,6 +161,40 @@ FEW_SHOT_EXAMPLES = [
 ]
 
 
+def build_system_prompt(safety_rules: SafetyRulesLoader | None = None) -> str:
+    """
+    NAV4RAIL XML system string (plus optional safety rules).
+
+    PoT / ReAct eval uses :data:`CODE_SYSTEM_PROMPT` instead; see
+    :func:`system_message_body_for_mode` for the string that matches
+    ``build_prompt`` per mode.
+    """
+
+    system_content = SYSTEM_PROMPT
+    if safety_rules:
+        system_content += "\n\n" + safety_rules.summarize_for_prompt()
+    return system_content
+
+
+def system_message_body_for_mode(
+    mode: str,
+    safety_rules: SafetyRulesLoader | None = None,
+) -> str:
+    """
+    System-role text exactly as ``build_prompt`` chooses for ``mode``.
+
+    Accepts benchmark ``training.method`` values (``pot``) and internal
+    ``build_prompt`` names (``program_of_thoughts``).
+    """
+
+    if mode in ("pot", "react_pot_agent", "program_of_thoughts"):
+        text = CODE_SYSTEM_PROMPT
+        if safety_rules is not None:
+            text += "\n\n" + safety_rules.summarize_for_prompt()
+        return text
+    return build_system_prompt(safety_rules=safety_rules)
+
+
 # ── Chain-of-Thought Template ────────────────────────────────────────────────
 
 COT_TEMPLATE = """\
@@ -173,6 +211,85 @@ Raisonnement :
 """
 
 
+# ── Code-as-Reasoning prompts (PoT / ReAct) ──────────────────────────────────
+
+CODE_SYSTEM_PROMPT = """\
+Tu es un expert en robotique ferroviaire NAV4RAIL. Pour chaque mission, tu ecris un
+SCRIPT PYTHON qui utilise l'API MissionBuilder pour construire un BehaviorTree XML
+BehaviorTree.CPP v4. Le script est execute dans un sandbox restreint et son stdout
+(ou la variable `xml`) devient le BT genere.
+
+REGLES :
+- Reponds UNIQUEMENT avec un bloc de code Python dans une cloture ```python ... ```.
+- Le script DOIT se terminer par `print(builder.to_xml())` (ou affecter `xml = builder.to_xml()`).
+- Seul le module `nav4rail_builder` peut etre importe. Aucune I/O, aucun os/subprocess.
+- Toute erreur levee par MissionBuilder (UnknownSkillError, PortError, StructuralError,
+  MissingRequiredSkillError) indique une mauvaise construction — corrige la logique.
+- Prefere les helpers haut-niveau (`add_get_mission`, `add_calculate_path`,
+  `add_base_preparation`, `add_execute`, `add_main_tree`) qui encodent les regles SR-023..SR-027.
+- Choisis les `step_types` en fonction de la mission :
+    Transport : inclure au moins un type parmi 0,1,2,3,4.
+    Inspection SANS controle : ajouter 10/11 (et 13/14 si non-arret) avec mesures seulement.
+    Inspection AVEC controle : ajouter 12 (requiert AnalyseMeasurements + Fallback correctif)
+    et eventuellement 13/14.
+"""
+
+POT_TEMPLATE = """\
+{api_docs}
+
+Mission : {mission}
+
+Ecris le script Python (dans un bloc ```python ... ```) qui construit le BehaviorTree
+pour cette mission et affiche le XML final via `print(builder.to_xml())`.
+"""
+
+REACT_INITIAL_TEMPLATE = POT_TEMPLATE
+
+REACT_REFINE_TEMPLATE = """\
+{api_docs}
+
+Mission : {mission}
+
+Tentative precedente :
+```python
+{previous_code}
+```
+
+Erreur rencontree (tour {iteration}) :
+{error_feedback}
+
+{validator_feedback}
+
+Corrige le script pour eliminer l'erreur ci-dessus. Reponds UNIQUEMENT avec un nouveau
+bloc ```python ... ``` complet (pas de diff). Termine par `print(builder.to_xml())`.
+"""
+
+
+def _format_history_feedback(history: list[dict[str, Any]] | None) -> tuple[str, str, str, int]:
+    """
+    Extract the most recent attempt's code + errors from an iteration history.
+
+    Each history entry is expected to have keys: code, error, validator (optional).
+    Returns (previous_code, error_feedback, validator_feedback, iteration_index).
+    If history is empty, returns ("", "", "", 0).
+    """
+    if not history:
+        return "", "", "", 0
+
+    last = history[-1]
+    previous_code = str(last.get("code", "")).strip()
+    error = last.get("error") or "(aucune exception — mais le score de validation est < 1.0)"
+    validator = last.get("validator") or ""
+    iteration = int(last.get("iteration", len(history)))
+
+    if validator:
+        validator_section = f"Validator feedback :\n{validator}"
+    else:
+        validator_section = ""
+
+    return previous_code, str(error), validator_section, iteration
+
+
 # ── Prompt Builder ───────────────────────────────────────────────────────────
 
 
@@ -183,17 +300,23 @@ def build_prompt(
     catalog: SkillsCatalog | None = None,
     safety_rules: SafetyRulesLoader | None = None,
     k_examples: int = 1,
+    history: list[dict[str, Any]] | None = None,
 ) -> str | list[dict[str, str]]:
     """
     Build prompt for a given mode.
 
     Args:
-        mode: "zero_shot", "few_shot", "schema_guided", "chain_of_thought", "sft"
+        mode: "zero_shot", "few_shot", "schema_guided", "chain_of_thought",
+              "sft", "program_of_thoughts", "react_pot_agent", "react_base_agent"
         mission: Natural language mission description
         model_config: Model-specific config (from base.yaml models section)
         catalog: SkillsCatalog for schema injection
         safety_rules: SafetyRulesLoader for rule injection
         k_examples: Number of few-shot examples (for "few_shot" mode)
+        history: For react_pot_agent / react_base_agent — prior attempts.
+                 react_pot_agent expects [{code, error, validator, iteration}].
+                 react_base_agent expects [{xml, score, errors, warnings, iteration}].
+                 If non-empty, the prompt becomes a refinement request.
 
     Returns:
         For chat_template models: list of dicts [{"role": ..., "content": ...}]
@@ -203,21 +326,20 @@ def build_prompt(
     use_chat = model_config.get("chat_template", True)
     supports_system = model_config.get("supports_system", True)
 
-    system_content = SYSTEM_PROMPT
-
-    # Add safety rules to system prompt
-    if safety_rules:
-        system_content += "\n\n" + safety_rules.summarize_for_prompt()
+    # Code-as-Reasoning modes (PoT) override the default XML-focused system prompt.
+    # react_base_agent emits XML directly, so it keeps the XML-focused system prompt.
+    if mode in {"program_of_thoughts", "react_pot_agent"}:
+        system_content = CODE_SYSTEM_PROMPT
+        if safety_rules is not None:
+            system_content += "\n\n" + safety_rules.summarize_for_prompt()
+    else:
+        system_content = build_system_prompt(safety_rules=safety_rules)
 
     if mode == "zero_shot":
         user_content = f"Mission : {mission}"
 
     elif mode == "few_shot":
         examples = FEW_SHOT_EXAMPLES[:k_examples]
-        example_parts = []
-        for ex in examples:
-            example_parts.append(f"Mission : {ex['mission']}\n\n{ex['xml']}")
-        user_content = "\n\n---\n\n".join(example_parts) + f"\n\n---\n\nMission : {mission}"
 
     elif mode == "schema_guided":
         if catalog:
@@ -232,12 +354,108 @@ def build_prompt(
     elif mode == "sft":
         user_content = f"Mission : {mission}"
 
+    elif mode == "program_of_thoughts":
+        from src.builder.api_docs import get_full_api_docs
+
+        api_docs = get_full_api_docs(catalog)
+        user_content = POT_TEMPLATE.format(api_docs=api_docs, mission=mission)
+
+    elif mode == "react_pot_agent":
+        from src.builder.api_docs import get_full_api_docs
+
+        api_docs = get_full_api_docs(catalog)
+        if history:
+            prev_code, error_feedback, validator_feedback, iteration = (
+                _format_history_feedback(history)
+            )
+            user_content = REACT_REFINE_TEMPLATE.format(
+                api_docs=api_docs,
+                mission=mission,
+                previous_code=prev_code,
+                error_feedback=error_feedback,
+                validator_feedback=validator_feedback,
+                iteration=iteration,
+            )
+        else:
+            user_content = REACT_INITIAL_TEMPLATE.format(
+                api_docs=api_docs, mission=mission
+            )
+
+    elif mode == "react_base_agent":
+        # Direct-XML refinement: delegate the inner prompt to one of the
+        # established XML-emitting modes, then optionally append refinement
+        # context from history.
+        inner_mode = (model_config or {}).get("inner_prompt_mode", "chain_of_thought")
+        if inner_mode not in {"zero_shot", "few_shot", "schema_guided", "chain_of_thought"}:
+            raise ValueError(
+                f"react_base_agent inner_prompt_mode must be zero_shot/few_shot/schema_guided/chain_of_thought, got {inner_mode!r}"
+            )
+        inner = build_prompt(
+            mode=inner_mode,
+            mission=mission,
+            model_config={**(model_config or {}), "inner_prompt_mode": None},
+            catalog=catalog,
+            safety_rules=safety_rules,
+            k_examples=k_examples,
+        )
+        if not history:
+            return inner
+
+        # Build a refinement footer from the most recent attempt.
+        last = history[-1]
+        prev_xml = str(last.get("xml", "")).strip()
+        prev_score = last.get("score", 0.0)
+        errors = last.get("errors") or []
+        warnings = last.get("warnings") or []
+        feedback_lines = [
+            f"Tentative precedente (score={prev_score:.2f}) :",
+            "```xml",
+            prev_xml or "(aucun XML produit)",
+            "```",
+        ]
+        if errors:
+            feedback_lines.append("Erreurs validateur : " + "; ".join(map(str, errors[:5])))
+        if warnings:
+            feedback_lines.append("Avertissements : " + "; ".join(map(str, warnings[:5])))
+        feedback_lines.append(
+            "Reecris le BT XML COMPLET en corrigeant ces erreurs. "
+            "Reponds avec un unique bloc <root>...</root>."
+        )
+        footer = "\n".join(feedback_lines)
+
+        if isinstance(inner, list):
+            inner = list(inner) + [{"role": "user", "content": footer}]
+            return inner
+        return f"{inner}\n\n{footer}"
+
     else:
         raise ValueError(f"Unknown prompt mode: {mode}")
 
     # Format based on model type
     if use_chat:
-        messages = []
+        messages: list[dict[str, str]] = []
+
+        if mode == "few_shot":
+            if supports_system:
+                messages.append({"role": "system", "content": system_content})
+                prefix = ""
+            else:
+                # Models without a system role (e.g. Gemma): prepend once to the first user turn.
+                prefix = system_content + "\n\n"
+
+            for j, ex in enumerate(examples):
+                user_turn = f"Mission : {ex['mission']}"
+                if j == 0 and prefix:
+                    user_turn = prefix + user_turn
+                messages.append({"role": "user", "content": user_turn})
+                messages.append({"role": "assistant", "content": ex["xml"]})
+
+            final_user = f"Mission : {mission}"
+            if not examples and prefix:
+                final_user = prefix + final_user
+            messages.append({"role": "user", "content": final_user})
+            return messages
+
         if supports_system:
             messages.append({"role": "system", "content": system_content})
             messages.append({"role": "user", "content": user_content})
@@ -247,6 +465,20 @@ def build_prompt(
         return messages
     else:
         # Mistral [INST]...[/INST] format
+        if mode == "few_shot":
+            turns: list[str] = []
+            for j, ex in enumerate(examples):
+                user_turn = f"Mission : {ex['mission']}"
+                if j == 0:
+                    user_turn = system_content + "\n\n" + user_turn
+                turns.append(f"<s>[INST] {user_turn} [/INST] {ex['xml']} </s>")
+
+            final_user = f"Mission : {mission}"
+            if not examples:
+                final_user = system_content + "\n\n" + final_user
+            turns.append(f"<s>[INST] {final_user} [/INST]")
+            return "\n".join(turns)
+
         return f"[INST] {system_content}\n\n{user_content} [/INST]"
 
 

@@ -1,0 +1,18 @@
+# Grammar-Constrained Decoding — GBNF (transformers-cfg)
+# =======================================================
+# Invoke with:
+#   python -m src.eval.benchmark --config configs/base.yaml --prompt-mode gbnf
+#   # or via array:  METHOD=gbnf CONSTRAINT=gbnf sbatch scripts/slurm/array_models.sh
+#
+# The prompt is still built with the zero_shot template — the constraint lives
+# entirely in the LogitsProcessor. Generate bt_grammar.gbnf first with:
+#   python -m src.eval.build_grammar
+
+eval:
+  constraint:
+    mode: "gbnf"
+    gbnf_path: "src/eval/bt_grammar.gbnf"
+
+  # GBNF already guarantees structural validity; port enrichment still helpful
+  # for optional ports the grammar permits but the model omitted.
+  enrich_ports: true

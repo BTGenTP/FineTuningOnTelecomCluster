@@ -29,6 +29,27 @@ def _build_bnb_config(cfg: dict) -> BitsAndBytesConfig | None:
     if not quant.get("load_in_4bit", False):
         return None
 
+    # 4-bit loads require a CUDA GPU; without it, HF would still build a BNB config and
+    # can hit bitsandbytes CPU paths (SIGILL on some cloud host CPUs).
+    if not torch.cuda.is_available():
+        logger.warning(
+            "CUDA not available: disabling 4-bit quantization (bitsandbytes needs a GPU). "
+            "Falling back to torch_dtype.",
+        )
+        return None
+
+    # bitsandbytes CUDA kernels require compute capability >= 7.5 (sm_75).
+    # On older GPUs (e.g. Tesla P100 = sm_60), skip quantization → fp16 fallback.
+    cc_major, cc_minor = torch.cuda.get_device_capability()
+    if cc_major < 7 or (cc_major == 7 and cc_minor < 5):
+        logger.warning(
+            "GPU compute capability %d.%d < 7.5: disabling 4-bit quantization "
+            "(bitsandbytes requires sm_75+). Falling back to fp16.",
+            cc_major,
+            cc_minor,
+        )
+        return None
+
     compute_dtype_str = quant.get("bnb_4bit_compute_dtype", "float16")
     compute_dtype = getattr(torch, compute_dtype_str, torch.float16)
 
@@ -121,6 +142,9 @@ def load_for_training(cfg: dict) -> tuple:
     if bnb_config:
         model_kwargs["quantization_config"] = bnb_config
     else:
+        if bf16 and torch.cuda.is_available() and not torch.cuda.is_bf16_supported():
+            logger.warning("GPU does not support bf16, falling back to fp16")
+            bf16 = False
         model_kwargs["torch_dtype"] = torch.bfloat16 if bf16 else torch.float16
 
     attn_impl = model_cfg.get("attn_implementation")
@@ -177,13 +201,24 @@ def load_for_inference(
 
     bnb_config = _build_bnb_config(cfg)
 
+    # Pin the full model to GPU 0 when CUDA is up. device_map="auto" can offload shards
+    # to CPU if the runtime briefly reports the GPU as unavailable (seen on vast.ai);
+    # bitsandbytes + CPU offload then triggers illegal-instruction crashes on some hosts.
+    if torch.cuda.is_available():
+        infer_device_map: str | dict[str, int] = {"": 0}
+    else:
+        infer_device_map = "cpu"
+
     model_kwargs: dict[str, Any] = {
-        "device_map": "auto",
+        "device_map": infer_device_map,
         "trust_remote_code": True,
     }
     if bnb_config:
         model_kwargs["quantization_config"] = bnb_config
     else:
+        if bf16 and torch.cuda.is_available() and not torch.cuda.is_bf16_supported():
+            logger.warning("GPU does not support bf16, falling back to fp16")
+            bf16 = False
         model_kwargs["torch_dtype"] = torch.bfloat16 if bf16 else torch.float16
 
     attn_impl = model_cfg.get("attn_implementation")

@@ -98,7 +98,7 @@ class SkillsCatalog:
     # ── Accessors (replacing hardcoded constants in validate_bt.py) ──────────
 
     def valid_skills(self) -> frozenset[str]:
-        """All 28 valid skill IDs. Replaces VALID_SKILLS."""
+        """All valid skill IDs (count read from catalog, not hardcoded)."""
         return frozenset(self._skills.keys())
 
     def condition_skills(self) -> frozenset[str]:
